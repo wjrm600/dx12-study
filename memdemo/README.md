@@ -273,16 +273,16 @@ Present는 모니터로 보낼 뿐이고 CPU(게임 코드)는 결과를 모릅�
 
 ## 7. 코드 구조 (`src/main.cpp` 한 파일)
 
-> 코드를 어디서부터 봐야 할지 모르겠다면 **[CODE_GUIDE.md](CODE_GUIDE.md)** 를 먼저 보세요. 시나리오마다 봐야 할 함수와 줄을 짚어 두었고, 코드 안에서는 Ctrl+F로 `[시나리오 N]` 을 찾으면 바로 그 자리로 갑니다.
+> 코드를 어디서부터 봐야 할지 모르겠다면 **[CODE_GUIDE.md](CODE_GUIDE.md)** 를 먼저 보세요. 시나리오마다 봐야 할 함수를 짚어 두었고, 코드 안에서는 Ctrl+F로 `[시나리오 N]` 을 찾으면 바로 그 자리로 갑니다.
 
 | 부분 | 하는 일 |
 |---|---|
 | `CreateTracked` / `CreateBuffer` | 모든 GPU 리소스를 여기서 만들고 힙 종류별 메모리를 집계 |
-| `InitD3D` | 장치, 큐(Direct + Copy), 펜스, 스왑체인, 디스크립터 힙, 프레임 자원 3세트 |
+| `InitD3D` = `LoadPipeline` + `LoadAssets` | 장치, 큐(Direct + Copy), 펜스, 스왑체인, 디스크립터 힙, 프레임 자원 3세트 / 깊이 버퍼, 루트 시그니처, PSO, 큐브, 텍스처 |
 | `CreateRootSignature` / `CreatePso` | 루트 시그니처(b0, b1, t0, b2, t1, s0)와 PSO 두 개 (A와 B는 DepthBias만 다름) |
-| `RebuildMesh` | 1번 시나리오: 힙 종류와 재전송 여부에 따라 행성 버퍼를 다시 만듦 |
-| `RenderFrame` | 한 프레임: 펜스 대기 → UI → CPU 데이터 준비 → 명령 기록 → 제출/Present → 측정 |
-| `DrawPanel` | 오른쪽 패널과 모든 쉬운 설명 툴팁 |
+| `RebuildMesh` → `CreateMeshInDefaultHeap` / `CreateMeshInCpuWritableHeap` | 1번 시나리오: 힙 종류와 재전송 여부에 따라 행성 버퍼를 다시 만듦 |
+| `RenderFrame` | 한 프레임. 단계 함수만 차례로 부름: `WaitForFrameSlot` → `BuildUi` → `PrepareCpuData` → `PopulateCommandList` → `SubmitAndPresent` → `UpdateStatsAndHistory` |
+| `DrawPanel` → `PanelScenario1_MeshHeap` ... `PanelScenario10_Texture` | 오른쪽 패널과 모든 쉬운 설명 툴팁 (시나리오마다 함수 하나) |
 | `ApplyPressure` / `SetPressureResidency` | 9번 VRAM 압박 실험 (할당, Evict, MakeResident) |
 | `RebuildTexture` / `GenerateTexturePixels` / `StageAndRecordTextureCopy` | 10번 텍스처: 픽셀과 밉맵 만들기, Upload 임시 상자 → 복사 큐 → VRAM, SRV |
 
