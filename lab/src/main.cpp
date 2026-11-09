@@ -10,11 +10,14 @@
 //  파일 구성:
 //    core.h / core.cpp   : 모든 장면이 같이 쓰는 DX12 뼈대 (장치, 스왑체인, 펜스 ...)
 //    scene.h             : 장면이 채워야 하는 함수 목록
+//    shader_file.*       : .hlsl 파일 읽기, 저장하면 다시 컴파일(핫 리로드), 셰이더 편집 창
 //    scenes/scene_*.cpp  : 장면 하나 = 주제 하나
+//    ../shaders/*.hlsl   : 장면마다 셰이더 파일 하나 (앱이 켜져 있어도 고치면 바로 반영)
 //    main.cpp (이 파일)   : 창, ImGui, 장면 메뉴, 메인 루프
 // =====================================================================
 #include "core.h"
 #include "scene.h"
+#include "shader_file.h"
 #include "imgui.h"
 #include "imgui_impl_win32.h"
 #include "imgui_impl_dx12.h"
@@ -139,6 +142,17 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int)
     const char* kFont = "C:\\Windows\\Fonts\\malgun.ttf";   // 한글: 맑은 고딕
     if (GetFileAttributesA(kFont) == INVALID_FILE_ATTRIBUTES || !io.Fonts->AddFontFromFileTTF(kFont))
         io.Fonts->AddFontDefault();
+    // 셰이더 편집 창용 고정폭 글꼴: Consolas + 한글은 맑은 고딕으로 채움
+    const char* kMono = "C:\\Windows\\Fonts\\consola.ttf";
+    if (GetFileAttributesA(kMono) != INVALID_FILE_ATTRIBUTES)
+    {
+        g_codeFont = io.Fonts->AddFontFromFileTTF(kMono);
+        if (g_codeFont && GetFileAttributesA(kFont) != INVALID_FILE_ATTRIBUTES)
+        {
+            ImFontConfig merge; merge.MergeMode = true;
+            io.Fonts->AddFontFromFileTTF(kFont, 0.0f, &merge);
+        }
+    }
 
     ImGui_ImplWin32_Init(hwnd);
     ImGui_ImplDX12_InitInfo ii;

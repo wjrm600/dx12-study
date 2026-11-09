@@ -16,6 +16,18 @@
 필요한 것: Windows 10/11, DX12 를 지원하는 GPU, Visual Studio 의 "C++를 사용한 데스크톱 개발" 워크로드.
 외부 다운로드는 없어요 (ImGui 는 `third_party/imgui` 에 들어 있어요).
 
+## 셰이더 보고 고치기 (핫 리로드)
+
+장면마다 셰이더가 `shaders/` 폴더에 따로 있어요 (HelloTriangle 의 `shaders.hlsl` 처럼). 장면 1은 [`shaders/raster.hlsl`](shaders/raster.hlsl).
+
+- 앱 안 **셰이더 창**(F2)에서 코드를 보고 고친 뒤 **Ctrl+S** 를 누르면 바로 다시 컴파일돼서 화면에 반영돼요.
+- VS / VS Code / 메모장에서 파일을 고쳐 저장해도 0.3초 안에 알아서 반영돼요 (앱을 다시 빌드하거나 껐다 켤 필요 없음).
+- 틀리면 앱은 꺼지지 않아요. 셰이더 창에 에러와 줄 번호가 빨간 글씨로 나오고, 화면은 마지막으로 성공한 셰이더로 계속 그려요. "줄 번호로 보기" 탭에서 에러 난 줄이 빨간색이에요.
+- 망가뜨려도 괜찮아요: `git checkout lab/shaders/raster.hlsl` 로 원래대로 돌아가요.
+- 파일 맨 위 주석에 해 볼 실험 ①~⑤가 있어요 (빨강만 남기기, 색 반전, discard, 체크무늬 ...).
+
+![셰이더 창](docs/shader-editor.png)
+
 ## 장면 목록
 
 | 번호 | 장면 | 배운 곳 |
@@ -75,9 +87,12 @@ lab/
   src/
     main.cpp           창, ImGui, 장면 메뉴, 메인 루프
     core.h / core.cpp  모든 장면이 같이 쓰는 DX12 뼈대 (장치, 스왑체인, 펜스, 프레임 자원)
+    shader_file.*      .hlsl 읽기, 저장하면 다시 컴파일, 셰이더 창
     scene.h            장면이 채울 함수 목록
     scenes/
       scene_raster.cpp 장면 1
+  shaders/
+    raster.hlsl        장면 1 셰이더 (실행 중에 읽음, 고치면 바로 반영)
   third_party/imgui    Dear ImGui 1.92.6
 ```
 

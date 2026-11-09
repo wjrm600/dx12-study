@@ -16,6 +16,7 @@
 //    [래스터-⑥] 되읽기: GPU 결과를 CPU 로 가져와 칸마다 비교
 // =====================================================================
 #include "../scene.h"
+#include "../shader_file.h"
 #include "imgui.h"
 #include <algorithm>
 #include <cmath>
@@ -101,53 +102,8 @@ static CellCalc Evaluate(const Tri& t, P2 p, int cull, bool topLeftRule)
 static unsigned char ToByte(double v) { v = std::min(1.0, std::max(0.0, v)); return (unsigned char)std::floor(v * 255.0 + 0.5); }
 
 // ---------------------------------------------------------------------
-// 셰이더 (HLSL). 정점 버퍼가 없다: 꼭짓점 좌표는 루트 상수로 받는다.
+// 셰이더는 lab/shaders/raster.hlsl 파일에 있다. 고치고 저장하면 BuildPipelines() 가 다시 불린다.
 // ---------------------------------------------------------------------
-static const char* kShader = R"HLSL(
-// 루트 상수 20개 (float 20개 = 80바이트). C++ 의 TriConstants 와 순서가 같아야 한다.
-cbuffer TriConstants : register(b0)
-{
-    float2 gA;    float2 gB;          // 꼭짓점 위치 (단위: 칸)
-    float2 gC;    float2 gGrid;       // gGrid = 작은 렌더 타깃 크기 (가로 칸 수, 세로 칸 수)
-    float4 gColA; float4 gColB; float4 gColC;
-};
-Texture2D    gLow   : register(t0);   // 1패스 결과 (작은 그림)
-SamplerState gPoint : register(s0);   // POINT: 가장 가까운 픽셀 하나만 읽음 (흐려지지 않음)
-
-struct VSOut { float4 pos : SV_Position; float4 col : COLOR0; };
-
-// [래스터-④] 1패스 VS: SV_VertexID(0,1,2)로 어느 꼭짓점인지 고른다
-VSOut TriVS(uint id : SV_VertexID)
-{
-    float2 p = gA; float4 c = gColA;
-    if (id == 1) { p = gB; c = gColB; }
-    if (id == 2) { p = gC; c = gColC; }
-    VSOut o;
-    // 칸 좌표 -> NDC(-1..1).  x: 0..가로 -> -1..1,  y: 0..세로 -> 1..-1 (화면은 아래로, NDC 는 위로)
-    o.pos = float4(p.x / gGrid.x * 2.0 - 1.0, 1.0 - p.y / gGrid.y * 2.0, 0.0, 1.0);
-    o.col = c;
-    return o;
-}
-// 1패스 PS: 래스터라이저가 wa*A색 + wb*B색 + wc*C색 으로 섞어 준 색을 그대로 쓴다
-float4 TriPS(VSOut i) : SV_Target { return float4(i.col.rgb, 1.0); }
-
-// [래스터-⑤] 2패스: 화면을 덮는 큰 삼각형 하나로 작은 그림을 늘려 그린다
-struct BlitOut { float4 pos : SV_Position; float2 uv : TEXCOORD0; };
-BlitOut BlitVS(uint id : SV_VertexID)
-{
-    BlitOut o;
-    float2 uv = float2((float)((id << 1) & 2), (float)(id & 2));   // (0,0) (2,0) (0,2)
-    o.uv = uv;
-    o.pos = float4(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, 0.0, 1.0);
-    return o;
-}
-float4 BlitPS(BlitOut i) : SV_Target
-{
-    float4 t = gLow.Sample(gPoint, i.uv);
-    if (t.a < 0.5) return float4(0.10, 0.10, 0.13, 1.0);   // 안 칠한 칸 = 배경색
-    return float4(t.rgb, 1.0);
-}
-)HLSL";
 
 struct TriConstants { float a[2], b[2], c[2], grid[2], colA[4], colB[4], colC[4]; };
 static_assert(sizeof(TriConstants) == 80, "root constants = 20 x 4 bytes");
@@ -192,6 +148,7 @@ private:
     bool  m_pinned = false;
 
     // GPU 자원
+    ShaderFile                  m_sh;              // lab/shaders/raster.hlsl
     ComPtr<ID3D12RootSignature> m_rootSig;
     ComPtr<ID3D12PipelineState> m_triPso[3];       // 컬링 없음 / 뒷면 / 앞면
     ComPtr<ID3D12PipelineState> m_blitPso;
@@ -220,6 +177,7 @@ private:
     void ClampAndSnap();
     double SnapStep() const { return m_snap == 0 ? 1.0 / 256.0 : (m_snap == 1 ? 0.5 : 1.0); }
     void CreateLowRes(int cols, int rows);
+    bool BuildPipelines();
     ImVec2 ToScreen(P2 p) const { return ImVec2(m_gx0 + (float)p.x * m_cell, m_gy0 + (float)p.y * m_cell); }
     void ApplyTestCase(int k);
 };
@@ -298,10 +256,29 @@ void RasterScene::Init()
     rs.NumParameters = 2; rs.pParameters = params; rs.NumStaticSamplers = 1; rs.pStaticSamplers = &samp;
     m_rootSig = CreateRootSignature(rs);
 
-    ComPtr<ID3DBlob> triVS = CompileShader(kShader, "raster.hlsl", "TriVS", "vs_5_0");
-    ComPtr<ID3DBlob> triPS = CompileShader(kShader, "raster.hlsl", "TriPS", "ps_5_0");
-    ComPtr<ID3DBlob> blitVS = CompileShader(kShader, "raster.hlsl", "BlitVS", "vs_5_0");
-    ComPtr<ID3DBlob> blitPS = CompileShader(kShader, "raster.hlsl", "BlitPS", "ps_5_0");
+    m_sh.Open("raster.hlsl");
+    BuildPipelines();
+
+    char env[8] = {};   // 개발용: LAB_VIEW=0/1/2 로 처음 보기 모드를 고른다 (스크린샷 확인용)
+    if (GetEnvironmentVariableA("LAB_VIEW", env, sizeof env) > 0) m_view = std::max(0, std::min(2, atoi(env)));
+
+    m_lowRtv = AllocRtv();
+    AllocSrv(&m_lowSrvCpu, &m_lowSrvGpu);
+    for (auto& s : m_slots)
+        s.readback = CreateBuffer(D3D12_HEAP_TYPE_READBACK, 256ull * kMaxRows, D3D12_RESOURCE_STATE_COPY_DEST);
+    CreateLowRes(m_cols, m_rows);
+}
+
+bool RasterScene::BuildPipelines()
+{
+    // 셰이더 4개 컴파일. 하나라도 틀리면 에러를 편집 창에 보여 주고, 지금 쓰던 PSO 를 그대로 둔다.
+    ComPtr<ID3DBlob> triVS, triPS, blitVS, blitPS;
+    std::string err;
+    bool ok = TryCompile(m_sh, "TriVS", "vs_5_0", triVS, err);
+    ok &= TryCompile(m_sh, "TriPS", "ps_5_0", triPS, err);
+    ok &= TryCompile(m_sh, "BlitVS", "vs_5_0", blitVS, err);
+    ok &= TryCompile(m_sh, "BlitPS", "ps_5_0", blitPS, err);
+    if (!ok) { m_sh.error = err; return false; }
 
     D3D12_GRAPHICS_PIPELINE_STATE_DESC pd{};
     pd.pRootSignature = m_rootSig.Get();
@@ -317,27 +294,34 @@ void RasterScene::Init()
     pd.SampleDesc.Count = 1;
 
     // ===== [래스터-③] 컬링은 PSO 의 래스터라이저 상태에 들어 있다 (그래서 바꾸려면 PSO 를 바꾼다) =====
+    ComPtr<ID3D12PipelineState> tri[3], blit;
     const D3D12_CULL_MODE modes[3] = { D3D12_CULL_MODE_NONE, D3D12_CULL_MODE_BACK, D3D12_CULL_MODE_FRONT };
     pd.VS = { triVS->GetBufferPointer(), triVS->GetBufferSize() };
     pd.PS = { triPS->GetBufferPointer(), triPS->GetBufferSize() };
     for (int i = 0; i < 3; i++)
     {
         pd.RasterizerState.CullMode = modes[i];
-        HR(g_dx.device->CreateGraphicsPipelineState(&pd, IID_PPV_ARGS(&m_triPso[i])));
+        if (FAILED(g_dx.device->CreateGraphicsPipelineState(&pd, IID_PPV_ARGS(&tri[i])))) ok = false;
     }
     pd.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
     pd.VS = { blitVS->GetBufferPointer(), blitVS->GetBufferSize() };
     pd.PS = { blitPS->GetBufferPointer(), blitPS->GetBufferSize() };
-    HR(g_dx.device->CreateGraphicsPipelineState(&pd, IID_PPV_ARGS(&m_blitPso)));
+    if (FAILED(g_dx.device->CreateGraphicsPipelineState(&pd, IID_PPV_ARGS(&blit)))) ok = false;
+    if (!ok)
+    {
+        m_sh.error = "컴파일은 됐지만 PSO 를 못 만들었어요.\n"
+                     "흔한 이유: VS 가 내보내는 값(VSOut)과 PS 가 받는 값이 안 맞음, 또는 루트 시그니처에 없는 레지스터(b1, t1 ...)를 씀.\n";
+        return false;
+    }
 
-    char env[8] = {};   // 개발용: LAB_VIEW=0/1/2 로 처음 보기 모드를 고른다 (스크린샷 확인용)
-    if (GetEnvironmentVariableA("LAB_VIEW", env, sizeof env) > 0) m_view = std::max(0, std::min(2, atoi(env)));
-
-    m_lowRtv = AllocRtv();
-    AllocSrv(&m_lowSrvCpu, &m_lowSrvGpu);
-    for (auto& s : m_slots)
-        s.readback = CreateBuffer(D3D12_HEAP_TYPE_READBACK, 256ull * kMaxRows, D3D12_RESOURCE_STATE_COPY_DEST);
-    CreateLowRes(m_cols, m_rows);
+    // 새 PSO 로 교체: 옛 PSO 는 GPU 가 아직 쓰고 있을 수 있어서, 다 끝날 때까지 기다린 뒤 바꾼다
+    if (m_blitPso) WaitIdle();
+    for (int i = 0; i < 3; i++) m_triPso[i] = tri[i];
+    m_blitPso = blit;
+    m_sh.error.clear();
+    m_sh.buildCount++;
+    m_caseId++;   // GPU 결과가 바뀌었으니 비교를 새로
+    return true;
 }
 
 void RasterScene::Shutdown()
@@ -544,6 +528,8 @@ void RasterScene::OnCanvas(const Canvas& c)
     else snprintf(status, sizeof status, "%s · 꼭짓점을 끌어 보세요 · 칸을 누르면 그 칸 계산표가 고정돼요", whole.front ? "앞면(시계 방향)" : "뒷면(반시계 방향)");
     dl->AddText(ImVec2(m_gx0, c.y + fs * 1.7f), IM_COL32(220, 220, 220, 255), status);
     ImGui::End();
+
+    DrawShaderEditor(m_sh, c);   // 셰이더 편집 창 (F2 로 열기/닫기)
 }
 
 // ---------------------------------------------------------------------
@@ -551,7 +537,9 @@ void RasterScene::OnCanvas(const Canvas& c)
 // ---------------------------------------------------------------------
 void RasterScene::OnRender(ID3D12GraphicsCommandList* cl, const Canvas&)
 {
+    if (m_sh.NeedsRebuild()) BuildPipelines();   // .hlsl 파일이 바뀌었으면 다시 컴파일 (핫 리로드)
     if (m_lowCols != m_cols || m_lowRows != m_rows) CreateLowRes(m_cols, m_rows);
+    if (!m_blitPso) return;                       // 처음부터 컴파일 실패: GPU 쪽은 못 그림 (에러는 편집 창에)
 
     TriConstants k{};
     k.a[0] = (float)m_tri.v[0].x; k.a[1] = (float)m_tri.v[0].y;
@@ -645,6 +633,14 @@ void RasterScene::OnPanel()
     if (ImGui::Button("처음 모양")) ResetShape();
     ImGui::SameLine();
     if (ImGui::Button("모서리 실험 모양")) EdgeShape();
+
+    ImGui::SeparatorText("셰이더 (raster.hlsl)");
+    if (ImGui::Button(m_sh.editorOpen ? "셰이더 창 닫기 (F2)" : "셰이더 창 열기 (F2)")) m_sh.editorOpen = !m_sh.editorOpen;
+    ImGui::SameLine();
+    if (ImGui::Button("다시 컴파일 (F5)")) m_sh.RequestRebuild();
+    if (!m_sh.error.empty()) ImGui::TextColored(ImVec4(1, 0.45f, 0.45f, 1), "컴파일 에러: 셰이더 창을 보세요");
+    else ImGui::TextColored(ImVec4(0.55f, 1, 0.55f, 1), "컴파일 성공 (%d번째) · 고치고 저장하면 바로 반영", m_sh.buildCount);
+    ImGui::TextDisabled("GPU 결과 보기로 바꿔야 셰이더를 고친 효과가 보여요");
 
     // ---- ① 삼각형 전체 ----
     const P2 A = m_tri.v[0], B = m_tri.v[1], C = m_tri.v[2];
