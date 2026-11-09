@@ -170,19 +170,10 @@ static int CursorCallback(ImGuiInputTextCallbackData* d)
     return 0;
 }
 
-void DrawShaderEditor(ShaderFile& f, const Canvas& c)
+// 위쪽 버튼 줄: 저장, 다시 읽기, 메모장
+static void EditorToolbar(ShaderFile& f)
 {
     ImGuiIO& io = ImGui::GetIO();
-    // 단축키: F2 창 열기/닫기, F5 파일에서 다시 읽고 컴파일
-    if (ImGui::IsKeyPressed(ImGuiKey_F2, false)) f.editorOpen = !f.editorOpen;
-    if (ImGui::IsKeyPressed(ImGuiKey_F5, false)) f.RequestRebuild();
-    if (!f.editorOpen) return;
-
-    ImGui::SetNextWindowPos(ImVec2(c.x + c.w * 0.40f, c.y + c.h * 0.30f), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(c.w * 0.58f, c.h * 0.68f), ImGuiCond_FirstUseEver);
-    std::string title = "셰이더: " + f.name + (f.editDirty ? " *" : "") + "###shader_editor_" + f.name;
-    if (!ImGui::Begin(title.c_str(), &f.editorOpen)) { ImGui::End(); return; }
-
     bool focused = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
     if (ImGui::Button("저장하고 컴파일 (Ctrl+S)") || (focused && io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_S, false))) f.SaveEdit();
     ImGui::SameLine();
@@ -190,8 +181,11 @@ void DrawShaderEditor(ShaderFile& f, const Canvas& c)
     ImGui::SameLine();
     if (ImGui::Button("메모장으로 열기")) ShellExecuteW(nullptr, L"open", L"notepad.exe", f.path.c_str(), nullptr, SW_SHOWNORMAL);
     ImGui::TextDisabled("%s", f.pathUtf8.c_str());
+}
 
-    // 상태 줄
+// 상태 줄: 성공이면 초록, 에러면 빨간 글씨로 컴파일러 메시지 그대로
+static void EditorStatus(const ShaderFile& f)
+{
     if (!f.error.empty())
     {
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.45f, 0.45f, 1.0f));
@@ -202,45 +196,73 @@ void DrawShaderEditor(ShaderFile& f, const Canvas& c)
     else
         ImGui::TextColored(ImVec4(0.55f, 1.0f, 0.55f, 1.0f), "컴파일 성공 (%d번째)%s", f.buildCount,
                            f.editDirty ? "  ·  고친 내용은 아직 저장 안 함" : "  ·  파일을 저장하면 자동으로 다시 컴파일돼요");
+}
 
-    std::vector<int> errLines = ErrorLines(f);
+// "편집" 탭: 고칠 수 있는 글상자
+static void EditorEditTab(ShaderFile& f)
+{
+    if (!ImGui::BeginTabItem("편집")) return;
+    ImGui::TextDisabled("줄 %d", f.cursorLine);
+    if (g_codeFont) ImGui::PushFont(g_codeFont, 0.0f);
+    if (ImGui::InputTextMultiline("##code", f.edit.data(), f.edit.size(), ImVec2(-1, -1),
+                                  ImGuiInputTextFlags_AllowTabInput | ImGuiInputTextFlags_CallbackAlways, CursorCallback, &f))
+        f.editDirty = true;
+    if (g_codeFont) ImGui::PopFont();
+    ImGui::EndTabItem();
+}
+
+// 한 줄 그리기: 줄 번호 + 내용 (에러 줄은 빨강)
+static void DrawCodeLine(int ln, const char* s, size_t len, bool bad)
+{
+    ImGui::TextColored(bad ? ImVec4(1, 0.4f, 0.4f, 1) : ImVec4(0.5f, 0.5f, 0.55f, 1), "%4d", ln);
+    ImGui::SameLine();
+    std::string line(s, len);
+    if (!line.empty() && line.back() == '\r') line.pop_back();
+    if (bad) ImGui::TextColored(ImVec4(1, 0.55f, 0.55f, 1), "%s", line.c_str());
+    else ImGui::TextUnformatted(line.c_str());
+}
+
+// "줄 번호로 보기" 탭: 보기 전용, 에러 난 줄이 빨간색
+static void EditorLinesTab(const ShaderFile& f)
+{
+    if (!ImGui::BeginTabItem("줄 번호로 보기")) return;
+    const std::vector<int> errLines = ErrorLines(f);
+    ImGui::TextDisabled("에러가 난 줄은 빨간색이에요. (보기 전용)");
+    ImGui::BeginChild("lines", ImVec2(-1, -1), ImGuiChildFlags_Borders, ImGuiWindowFlags_HorizontalScrollbar);
+    if (g_codeFont) ImGui::PushFont(g_codeFont, 0.0f);
+    const char* s = f.edit.data();
+    int ln = 1;
+    while (*s || ln == 1)
+    {
+        const char* e = strchr(s, '\n');
+        size_t len = e ? (size_t)(e - s) : strlen(s);
+        DrawCodeLine(ln, s, len, std::find(errLines.begin(), errLines.end(), ln) != errLines.end());
+        if (!e) break;
+        s = e + 1; ln++;
+    }
+    if (g_codeFont) ImGui::PopFont();
+    ImGui::EndChild();
+    ImGui::EndTabItem();
+}
+
+void DrawShaderEditor(ShaderFile& f, const Canvas& c)
+{
+    // 단축키: F2 창 열기/닫기, F5 파일에서 다시 읽고 컴파일
+    if (ImGui::IsKeyPressed(ImGuiKey_F2, false)) f.editorOpen = !f.editorOpen;
+    if (ImGui::IsKeyPressed(ImGuiKey_F5, false)) f.RequestRebuild();
+    if (!f.editorOpen) return;
+
+    ImGui::SetNextWindowPos(ImVec2(c.x + c.w * 0.40f, c.y + c.h * 0.30f), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(c.w * 0.58f, c.h * 0.68f), ImGuiCond_FirstUseEver);
+    std::string title = "셰이더: " + f.name + (f.editDirty ? " *" : "") + "###shader_editor_" + f.name;
+    if (!ImGui::Begin(title.c_str(), &f.editorOpen)) { ImGui::End(); return; }
+
+    EditorToolbar(f);
+    EditorStatus(f);
     if (ImGui::BeginTabBar("tabs"))
     {
-        if (ImGui::BeginTabItem("편집"))
-        {
-            ImGui::TextDisabled("줄 %d", f.cursorLine);
-            if (g_codeFont) ImGui::PushFont(g_codeFont, 0.0f);
-            if (ImGui::InputTextMultiline("##code", f.edit.data(), f.edit.size(), ImVec2(-1, -1),
-                                          ImGuiInputTextFlags_AllowTabInput | ImGuiInputTextFlags_CallbackAlways, CursorCallback, &f))
-                f.editDirty = true;
-            if (g_codeFont) ImGui::PopFont();
-            ImGui::EndTabItem();
-        }
-        if (ImGui::BeginTabItem("줄 번호로 보기"))
-        {
-            ImGui::TextDisabled("에러가 난 줄은 빨간색이에요. (보기 전용)");
-            ImGui::BeginChild("lines", ImVec2(-1, -1), ImGuiChildFlags_Borders, ImGuiWindowFlags_HorizontalScrollbar);
-            if (g_codeFont) ImGui::PushFont(g_codeFont, 0.0f);
-            const char* s = f.edit.data();
-            int ln = 1;
-            while (*s || ln == 1)
-            {
-                const char* e = strchr(s, '\n');
-                size_t len = e ? (size_t)(e - s) : strlen(s);
-                bool bad = std::find(errLines.begin(), errLines.end(), ln) != errLines.end();
-                ImGui::TextColored(bad ? ImVec4(1, 0.4f, 0.4f, 1) : ImVec4(0.5f, 0.5f, 0.55f, 1), "%4d", ln);
-                ImGui::SameLine();
-                std::string line(s, len);
-                if (!line.empty() && line.back() == '\r') line.pop_back();
-                if (bad) ImGui::TextColored(ImVec4(1, 0.55f, 0.55f, 1), "%s", line.c_str());
-                else ImGui::TextUnformatted(line.c_str());
-                if (!e) break;
-                s = e + 1; ln++;
-            }
-            if (g_codeFont) ImGui::PopFont();
-            ImGui::EndChild();
-            ImGui::EndTabItem();
-        }
+        EditorEditTab(f);
+        EditorLinesTab(f);
         ImGui::EndTabBar();
     }
     ImGui::End();

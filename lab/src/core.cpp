@@ -148,9 +148,8 @@ static void CreateBackBufferViews()
     }
 }
 
-void InitD3D(HWND hwnd)
+static void CreateFactory()
 {
-    g_dx.hwnd = hwnd;
     UINT factoryFlags = 0;
 #ifdef _DEBUG
     {
@@ -159,8 +158,11 @@ void InitD3D(HWND hwnd)
     }
 #endif
     HR(CreateDXGIFactory2(factoryFlags, IID_PPV_ARGS(&g_dx.factory)));
+}
 
-    // 1) 장치(Device): 고성능 GPU(외장 그래픽)를 먼저 고른다
+// 1) 장치(Device): 고성능 GPU(외장 그래픽)를 먼저 고른다
+static void CreateDevice()
+{
     ComPtr<IDXGIAdapter1> adapter;
     for (UINT i = 0; g_dx.factory->EnumAdapterByGpuPreference(i, DXGI_GPU_PREFERENCE_HIGH_PERFORMANCE, IID_PPV_ARGS(&adapter)) != DXGI_ERROR_NOT_FOUND; i++)
     {
@@ -175,21 +177,29 @@ void InitD3D(HWND hwnd)
         adapter.Reset();
     }
     if (!g_dx.device) Fatal("D3D12CreateDevice (DX12를 지원하는 GPU가 없음)", E_FAIL, __FILE__, __LINE__);
+}
 
-    {
-        BOOL tearing = FALSE;
-        ComPtr<IDXGIFactory5> f5;
-        if (SUCCEEDED(g_dx.factory.As(&f5)) && SUCCEEDED(f5->CheckFeatureSupport(DXGI_FEATURE_PRESENT_ALLOW_TEARING, &tearing, sizeof(tearing))))
-            g_dx.tearing = tearing != FALSE;
-    }
+// VSync 를 끌 때 화면 찢어짐(tearing)을 허용할 수 있는지
+static void CheckTearingSupport()
+{
+    BOOL tearing = FALSE;
+    ComPtr<IDXGIFactory5> f5;
+    if (SUCCEEDED(g_dx.factory.As(&f5)) && SUCCEEDED(f5->CheckFeatureSupport(DXGI_FEATURE_PRESENT_ALLOW_TEARING, &tearing, sizeof(tearing))))
+        g_dx.tearing = tearing != FALSE;
+}
 
-    // 2) 명령 큐: CPU가 쓴 "할 일 목록"을 GPU에게 넘기는 창구
+// 2) 명령 큐: CPU가 쓴 "할 일 목록"을 GPU에게 넘기는 창구. 펜스 = GPU 가 어디까지 했는지 보는 번호표
+static void CreateCommandQueue()
+{
     D3D12_COMMAND_QUEUE_DESC qd{}; qd.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
     HR(g_dx.device->CreateCommandQueue(&qd, IID_PPV_ARGS(&g_dx.queue)));
     HR(g_dx.device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&g_dx.fence)));
     g_dx.fenceEvent = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+}
 
-    // 3) 스왑체인: 화면에 번갈아 내보낼 백 버퍼 3장
+// 3) 스왑체인: 화면에 번갈아 내보낼 백 버퍼 3장
+static void CreateSwapChain(HWND hwnd)
+{
     RECT rc; GetClientRect(hwnd, &rc);
     g_dx.width = std::max<UINT>(1, rc.right - rc.left); g_dx.height = std::max<UINT>(1, rc.bottom - rc.top);
     DXGI_SWAP_CHAIN_DESC1 sd{};
@@ -201,8 +211,11 @@ void InitD3D(HWND hwnd)
     HR(g_dx.factory->CreateSwapChainForHwnd(g_dx.queue.Get(), hwnd, &sd, nullptr, nullptr, &sc1));
     HR(sc1.As(&g_dx.swapChain));
     g_dx.factory->MakeWindowAssociation(hwnd, DXGI_MWA_NO_ALT_ENTER);
+}
 
-    // 4) 디스크립터 힙: RTV(렌더 타깃 이름표), SRV(셰이더가 읽는 텍스처 이름표, ImGui와 공유)
+// 4) 디스크립터 힙: RTV(렌더 타깃 이름표), SRV(셰이더가 읽는 텍스처 이름표, ImGui와 공유)
+static void CreateDescriptorHeaps()
+{
     D3D12_DESCRIPTOR_HEAP_DESC hd{};
     hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV; hd.NumDescriptors = kRtvHeapSize;
     HR(g_dx.device->CreateDescriptorHeap(&hd, IID_PPV_ARGS(&g_dx.rtvHeap)));
@@ -212,13 +225,29 @@ void InitD3D(HWND hwnd)
     g_dx.srvInc = g_dx.device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
     for (int i = (int)kSrvHeapSize - 1; i >= 0; i--) g_freeSrv.push_back((UINT)i);
     for (int i = (int)kRtvHeapSize - 1; i >= (int)kBackBufferCount; i--) g_freeRtv.push_back((UINT)i);
-    CreateBackBufferViews();
+}
 
-    // 5) 프레임 자원: 명령 할당자(명령을 적는 메모장)는 프레임마다 따로
+// 5) 프레임 자원: 명령 할당자(명령을 적는 메모장)는 프레임마다 따로, 명령 리스트는 하나
+static void CreateFrameResources()
+{
     for (UINT i = 0; i < kFrameCount; i++)
         HR(g_dx.device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&g_dx.alloc[i])));
     HR(g_dx.device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, g_dx.alloc[0].Get(), nullptr, IID_PPV_ARGS(&g_dx.list)));
     HR(g_dx.list->Close());
+}
+
+// DirectX-Graphics-Samples 의 LoadPipeline() 처럼 순서대로 한 단계씩
+void InitD3D(HWND hwnd)
+{
+    g_dx.hwnd = hwnd;
+    CreateFactory();          // 0) DXGI 팩토리 (+ 디버그 빌드면 디버그 레이어)
+    CreateDevice();           // 1) 장치
+    CheckTearingSupport();
+    CreateCommandQueue();     // 2) 명령 큐 + 펜스
+    CreateSwapChain(hwnd);    // 3) 스왑체인
+    CreateDescriptorHeaps();  // 4) RTV / SRV 힙
+    CreateBackBufferViews();
+    CreateFrameResources();   // 5) 프레임마다 명령 할당자
 }
 
 void ShutdownD3D()
@@ -268,9 +297,9 @@ ID3D12GraphicsCommandList* BeginFrame(const float clearColor[4])
 // 프레임 자원 세트 번호를 미리 알려 주는 함수 (BeginFrame 전에 장면이 되읽기 결과를 꺼낼 때 사용)
 void WaitCurrentFrameSlot() { WaitFence(g_dx.frameFence[g_dx.frameIndex]); }
 
-void EndFrame()
+// ImGui 를 백 버퍼 위에 덮어 그리기
+static void RecordImGui(ID3D12GraphicsCommandList* cl)
 {
-    ID3D12GraphicsCommandList* cl = g_dx.list.Get();
     D3D12_CPU_DESCRIPTOR_HANDLE rtv = CurrentBackBufferRtv();
     D3D12_VIEWPORT vp{ 0, 0, (float)g_dx.width, (float)g_dx.height, 0, 1 };
     D3D12_RECT sc{ 0, 0, (LONG)g_dx.width, (LONG)g_dx.height };
@@ -280,12 +309,11 @@ void EndFrame()
     ID3D12DescriptorHeap* heaps[] = { g_dx.srvHeap.Get() };
     cl->SetDescriptorHeaps(1, heaps);
     ImGui_ImplDX12_RenderDrawData(ImGui::GetDrawData(), cl);
+}
 
-    ID3D12Resource* back = g_dx.backBuffers[g_dx.swapChain->GetCurrentBackBufferIndex()].Get();
-    D3D12_RESOURCE_BARRIER b = Transition(back, D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT);
-    cl->ResourceBarrier(1, &b);
-    HR(cl->Close());
-
+// 명령 리스트를 GPU 에 넘기고 화면에 내보낸 뒤, 이 프레임 세트에 번호표(펜스)를 건다
+static void SubmitAndPresent(ID3D12GraphicsCommandList* cl)
+{
     ID3D12CommandList* lists[] = { cl };
     g_dx.queue->ExecuteCommandLists(1, lists);
     HRESULT phr = g_dx.swapChain->Present(g_dx.vsync ? 1 : 0, (!g_dx.vsync && g_dx.tearing) ? DXGI_PRESENT_ALLOW_TEARING : 0);
@@ -298,4 +326,15 @@ void EndFrame()
     g_dx.frameFence[g_dx.frameIndex] = g_dx.fenceValue;   // "이 세트는 번호표 N이 걸리면 다시 써도 됨"
     g_dx.frameIndex = (g_dx.frameIndex + 1) % kFrameCount;
     g_dx.frameNo++;
+}
+
+void EndFrame()
+{
+    ID3D12GraphicsCommandList* cl = g_dx.list.Get();
+    RecordImGui(cl);
+    ID3D12Resource* back = g_dx.backBuffers[g_dx.swapChain->GetCurrentBackBufferIndex()].Get();
+    D3D12_RESOURCE_BARRIER b = Transition(back, D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT);
+    cl->ResourceBarrier(1, &b);
+    HR(cl->Close());
+    SubmitAndPresent(cl);
 }

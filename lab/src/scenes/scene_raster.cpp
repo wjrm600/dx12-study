@@ -180,6 +180,50 @@ private:
     bool BuildPipelines();
     ImVec2 ToScreen(P2 p) const { return ImVec2(m_gx0 + (float)p.x * m_cell, m_gy0 + (float)p.y * m_cell); }
     void ApplyTestCase(int k);
+    bool CheckAndLogTestCase();
+    bool NextTestCase();
+
+    // Init 단계
+    struct ShaderBlobs { ComPtr<ID3DBlob> triVS, triPS, blitVS, blitPS; };
+    void CreateRootSig();
+    void ReadStartViewFromEnv();
+    void CreateReadbackBuffers();
+    bool CompileShaders(ShaderBlobs& b, std::string& err);
+    bool CreatePsos(const ShaderBlobs& b, ComPtr<ID3D12PipelineState> tri[3], ComPtr<ID3D12PipelineState>& blit);
+
+    // OnCanvas 단계
+    float GridW() const { return m_cols * m_cell; }
+    float GridH() const { return m_rows * m_cell; }
+    P2   SelectedCenter() const { return P2{ m_selX + 0.5, m_selY + 0.5 }; }
+    bool CompareReady() const { return m_cmp.valid && m_cmp.cols == m_cols && m_cmp.rows == m_rows; }
+    void LayoutGrid(const Canvas& c);
+    void BeginCanvasWindow(const Canvas& c);
+    int  PickVertex(ImVec2 m) const;
+    void HandleMouse();
+    void DrawCells(ImDrawList* dl) const;
+    void DrawGridLines(ImDrawList* dl) const;
+    void DrawSelectedCell(ImDrawList* dl) const;
+    void DrawTriangleEdges(ImDrawList* dl, bool culled) const;
+    void DrawVertices(ImDrawList* dl) const;
+    void DrawStatusText(ImDrawList* dl, const Canvas& c, const CellCalc& whole) const;
+
+    // OnRender 단계
+    TriConstants MakeConstants() const;
+    void SetRootArguments(ID3D12GraphicsCommandList* cl);
+    void RenderTriangleToLowRes(ID3D12GraphicsCommandList* cl);
+    void CopyLowResToReadback(ID3D12GraphicsCommandList* cl);
+    void DrawLowResToScreen(ID3D12GraphicsCommandList* cl);
+
+    // OnPanel 단계
+    void PanelSettings();
+    void PanelShader();
+    void PanelWholeTriangle(const CellCalc& cc);
+    void PanelCellTable(const CellCalc& cc);
+    void PanelCellVerdict(const CellCalc& cc);
+    void PanelCellColors(const CellCalc& cc);
+    void PanelCompare();
+    void PanelEli5();
+    void PanelCodeFlow();
 };
 
 // ---------------------------------------------------------------------
@@ -237,6 +281,16 @@ void RasterScene::ClampAndSnap()
 // ---------------------------------------------------------------------
 void RasterScene::Init()
 {
+    CreateRootSig();                 // 1) 셰이더에 무엇을 넘기는지 (루트 상수 b0, SRV t0, 샘플러 s0)
+    m_sh.Open("raster.hlsl");        // 2) 셰이더 파일 읽기
+    BuildPipelines();                //    컴파일 + PSO (실패해도 앱은 계속)
+    ReadStartViewFromEnv();
+    CreateReadbackBuffers();         // 3) 되읽기 상자 + 작은 그림용 서술자 자리
+    CreateLowRes(m_cols, m_rows);    // 4) 작은 렌더 타깃
+}
+
+void RasterScene::CreateRootSig()
+{
     // 루트 시그니처: [0] 루트 상수 20개(b0)  [1] 표: SRV 1개(t0)  + 고정 샘플러 s0 (POINT)
     D3D12_DESCRIPTOR_RANGE range{};
     range.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV; range.NumDescriptors = 1; range.BaseShaderRegister = 0;
@@ -255,33 +309,37 @@ void RasterScene::Init()
     D3D12_ROOT_SIGNATURE_DESC rs{};
     rs.NumParameters = 2; rs.pParameters = params; rs.NumStaticSamplers = 1; rs.pStaticSamplers = &samp;
     m_rootSig = CreateRootSignature(rs);
+}
 
-    m_sh.Open("raster.hlsl");
-    BuildPipelines();
-
+void RasterScene::ReadStartViewFromEnv()
+{
     char env[8] = {};   // 개발용: LAB_VIEW=0/1/2 로 처음 보기 모드를 고른다 (스크린샷 확인용)
     if (GetEnvironmentVariableA("LAB_VIEW", env, sizeof env) > 0) m_view = std::max(0, std::min(2, atoi(env)));
+}
 
+void RasterScene::CreateReadbackBuffers()
+{
     m_lowRtv = AllocRtv();
     AllocSrv(&m_lowSrvCpu, &m_lowSrvGpu);
     for (auto& s : m_slots)
         s.readback = CreateBuffer(D3D12_HEAP_TYPE_READBACK, 256ull * kMaxRows, D3D12_RESOURCE_STATE_COPY_DEST);
-    CreateLowRes(m_cols, m_rows);
 }
 
-bool RasterScene::BuildPipelines()
+// 셰이더 4개 컴파일. 하나라도 틀리면 false 와 에러 메시지
+bool RasterScene::CompileShaders(ShaderBlobs& b, std::string& err)
 {
-    // 셰이더 4개 컴파일. 하나라도 틀리면 에러를 편집 창에 보여 주고, 지금 쓰던 PSO 를 그대로 둔다.
-    ComPtr<ID3DBlob> triVS, triPS, blitVS, blitPS;
-    std::string err;
-    bool ok = TryCompile(m_sh, "TriVS", "vs_5_0", triVS, err);
-    ok &= TryCompile(m_sh, "TriPS", "ps_5_0", triPS, err);
-    ok &= TryCompile(m_sh, "BlitVS", "vs_5_0", blitVS, err);
-    ok &= TryCompile(m_sh, "BlitPS", "ps_5_0", blitPS, err);
-    if (!ok) { m_sh.error = err; return false; }
+    bool ok = TryCompile(m_sh, "TriVS", "vs_5_0", b.triVS, err);
+    ok &= TryCompile(m_sh, "TriPS", "ps_5_0", b.triPS, err);
+    ok &= TryCompile(m_sh, "BlitVS", "vs_5_0", b.blitVS, err);
+    ok &= TryCompile(m_sh, "BlitPS", "ps_5_0", b.blitPS, err);
+    return ok;
+}
 
+// 두 패스가 같이 쓰는 PSO 기본값 (셰이더와 컬링만 나중에 바꿔 끼운다)
+static D3D12_GRAPHICS_PIPELINE_STATE_DESC BasePsoDesc(ID3D12RootSignature* rootSig)
+{
     D3D12_GRAPHICS_PIPELINE_STATE_DESC pd{};
-    pd.pRootSignature = m_rootSig.Get();
+    pd.pRootSignature = rootSig;
     pd.InputLayout = { nullptr, 0 };                 // 정점 버퍼 없음
     pd.RasterizerState.FillMode = D3D12_FILL_MODE_SOLID;
     pd.RasterizerState.FrontCounterClockwise = FALSE; // 기본값: 화면에서 시계 방향 = 앞면
@@ -292,22 +350,39 @@ bool RasterScene::BuildPipelines()
     pd.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
     pd.NumRenderTargets = 1; pd.RTVFormats[0] = kBackBufferFormat;
     pd.SampleDesc.Count = 1;
+    return pd;
+}
+
+bool RasterScene::CreatePsos(const ShaderBlobs& b, ComPtr<ID3D12PipelineState> tri[3], ComPtr<ID3D12PipelineState>& blit)
+{
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC pd = BasePsoDesc(m_rootSig.Get());
+    bool ok = true;
 
     // ===== [래스터-③] 컬링은 PSO 의 래스터라이저 상태에 들어 있다 (그래서 바꾸려면 PSO 를 바꾼다) =====
-    ComPtr<ID3D12PipelineState> tri[3], blit;
     const D3D12_CULL_MODE modes[3] = { D3D12_CULL_MODE_NONE, D3D12_CULL_MODE_BACK, D3D12_CULL_MODE_FRONT };
-    pd.VS = { triVS->GetBufferPointer(), triVS->GetBufferSize() };
-    pd.PS = { triPS->GetBufferPointer(), triPS->GetBufferSize() };
+    pd.VS = { b.triVS->GetBufferPointer(), b.triVS->GetBufferSize() };
+    pd.PS = { b.triPS->GetBufferPointer(), b.triPS->GetBufferSize() };
     for (int i = 0; i < 3; i++)
     {
         pd.RasterizerState.CullMode = modes[i];
         if (FAILED(g_dx.device->CreateGraphicsPipelineState(&pd, IID_PPV_ARGS(&tri[i])))) ok = false;
     }
     pd.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
-    pd.VS = { blitVS->GetBufferPointer(), blitVS->GetBufferSize() };
-    pd.PS = { blitPS->GetBufferPointer(), blitPS->GetBufferSize() };
+    pd.VS = { b.blitVS->GetBufferPointer(), b.blitVS->GetBufferSize() };
+    pd.PS = { b.blitPS->GetBufferPointer(), b.blitPS->GetBufferSize() };
     if (FAILED(g_dx.device->CreateGraphicsPipelineState(&pd, IID_PPV_ARGS(&blit)))) ok = false;
-    if (!ok)
+    return ok;
+}
+
+bool RasterScene::BuildPipelines()
+{
+    // 컴파일 -> PSO 만들기 -> 교체. 중간에 실패하면 에러를 편집 창에 보여 주고, 지금 쓰던 PSO 를 그대로 둔다.
+    ShaderBlobs blobs;
+    std::string err;
+    if (!CompileShaders(blobs, err)) { m_sh.error = err; return false; }
+
+    ComPtr<ID3D12PipelineState> tri[3], blit;
+    if (!CreatePsos(blobs, tri, blit))
     {
         m_sh.error = "컴파일은 됐지만 PSO 를 못 만들었어요.\n"
                      "흔한 이유: VS 가 내보내는 값(VSOut)과 PS 가 받는 값이 안 맞음, 또는 루트 시그니처에 없는 레지스터(b1, t1 ...)를 씀.\n";
@@ -390,6 +465,24 @@ void RasterScene::OnFrameReused(UINT slot)
 // ---------------------------------------------------------------------
 void RasterScene::OnCanvas(const Canvas& c)
 {
+    LayoutGrid(c);                   // 1) 칸 크기, 격자 위치
+    BeginCanvasWindow(c);
+    HandleMouse();                   // 2) 꼭짓점 끌기, 칸 고르기
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    DrawCells(dl);                   // 3) 칸 칠하기 (CPU 계산 / 비교 표시)
+    DrawGridLines(dl);
+    DrawSelectedCell(dl);            // 4) 고른 칸의 세 조각
+    const CellCalc whole = Evaluate(m_tri, SelectedCenter(), m_cull, m_topLeft);
+    DrawTriangleEdges(dl, whole.culled);   // 5) 삼각형 모서리 + 꼭짓점
+    DrawVertices(dl);
+    DrawStatusText(dl, c, whole);    // 6) 위쪽 안내 글
+    ImGui::End();
+
+    DrawShaderEditor(m_sh, c);       // 셰이더 편집 창 (F2 로 열기/닫기)
+}
+
+void RasterScene::LayoutGrid(const Canvas& c)
+{
     const float fs = ImGui::GetFontSize();
     const float margin = fs * 1.0f, top = fs * 3.4f;
     // 칸 크기: 가로 칸 수로 정하고, 세로 칸 수는 남는 높이에 맞춘다 (칸은 정사각형)
@@ -399,33 +492,42 @@ void RasterScene::OnCanvas(const Canvas& c)
     if (!m_shapeReady) { ResetShape(); m_shapeReady = true; }
     m_gx0 = c.x + margin;
     m_gy0 = c.y + top;
-    const float gw = m_cols * m_cell, gh = m_rows * m_cell;
+}
 
+void RasterScene::BeginCanvasWindow(const Canvas& c)
+{
     ImGui::SetNextWindowPos(ImVec2(c.x, c.y));
     ImGui::SetNextWindowSize(ImVec2(c.w, c.h));
     ImGui::Begin("##canvas", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoMove |
                                       ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoScrollWithMouse);
-    ImDrawList* dl = ImGui::GetWindowDrawList();
-    ImGuiIO& io = ImGui::GetIO();
+}
 
-    // ---- 마우스 ----
+// 누른 곳에서 가장 가까운 꼭짓점 (손가락 굵기 안에 없으면 -1)
+int RasterScene::PickVertex(ImVec2 m) const
+{
+    int pick = -1;
+    float best = ImGui::GetFontSize() * 0.9f;
+    for (int i = 0; i < 3; i++)
+    {
+        ImVec2 s = ToScreen(m_tri.v[i]);
+        float d = std::sqrt((s.x - m.x) * (s.x - m.x) + (s.y - m.y) * (s.y - m.y));
+        if (d < best) { best = d; pick = i; }
+    }
+    return pick;
+}
+
+void RasterScene::HandleMouse()
+{
     ImGui::SetCursorScreenPos(ImVec2(m_gx0, m_gy0));
-    ImGui::InvisibleButton("grid", ImVec2(gw, gh));
+    ImGui::InvisibleButton("grid", ImVec2(GridW(), GridH()));
     const bool hovered = ImGui::IsItemHovered();
-    const ImVec2 m = io.MousePos;
+    const ImVec2 m = ImGui::GetIO().MousePos;
+    const int cx = (int)std::floor((m.x - m_gx0) / m_cell), cy = (int)std::floor((m.y - m_gy0) / m_cell);
     if (ImGui::IsItemActivated())
     {
-        m_drag = -1;
-        float best = fs * 0.9f;
-        for (int i = 0; i < 3; i++)
-        {
-            ImVec2 s = ToScreen(m_tri.v[i]);
-            float d = std::sqrt((s.x - m.x) * (s.x - m.x) + (s.y - m.y) * (s.y - m.y));
-            if (d < best) { best = d; m_drag = i; }
-        }
+        m_drag = PickVertex(m);
         if (m_drag < 0)   // 꼭짓점이 아닌 칸을 누르면 그 칸을 고정 / 해제
         {
-            int cx = (int)std::floor((m.x - m_gx0) / m_cell), cy = (int)std::floor((m.y - m_gy0) / m_cell);
             if (m_pinned && cx == m_selX && cy == m_selY) m_pinned = false;
             else { m_pinned = true; m_selX = cx; m_selY = cy; }
         }
@@ -437,17 +539,15 @@ void RasterScene::OnCanvas(const Canvas& c)
         m_caseId++;
     }
     if (!ImGui::IsItemActive()) m_drag = -1;
-    if (hovered && !m_pinned && m_drag < 0)
-    {
-        m_selX = (int)std::floor((m.x - m_gx0) / m_cell);
-        m_selY = (int)std::floor((m.y - m_gy0) / m_cell);
-    }
+    if (hovered && !m_pinned && m_drag < 0) { m_selX = cx; m_selY = cy; }
     if (m_selX < 0 || m_selY < 0 || m_selX >= m_cols || m_selY >= m_rows) { m_selX = m_cols / 2; m_selY = m_rows / 2; }
+}
 
-    // ---- 칸 채우기 ----
-    const bool cmpOk = m_cmp.valid && m_cmp.cols == m_cols && m_cmp.rows == m_rows;
+void RasterScene::DrawCells(ImDrawList* dl) const
+{
+    const bool cmpOk = CompareReady();
     if (m_view == VIEW_CPU)
-        dl->AddRectFilled(ImVec2(m_gx0, m_gy0), ImVec2(m_gx0 + gw, m_gy0 + gh), IM_COL32(26, 26, 33, 255));
+        dl->AddRectFilled(ImVec2(m_gx0, m_gy0), ImVec2(m_gx0 + GridW(), m_gy0 + GridH()), IM_COL32(26, 26, 33, 255));
     for (int y = 0; y < m_rows; y++)
         for (int x = 0; x < m_cols; x++)
         {
@@ -464,18 +564,23 @@ void RasterScene::OnCanvas(const Canvas& c)
             }
             else if (m_cell >= 10) dl->AddCircleFilled(ctr, 1.5f, IM_COL32(150, 150, 160, 120));   // 픽셀 중심
         }
+}
 
-    // ---- 격자선 ----
+void RasterScene::DrawGridLines(ImDrawList* dl) const
+{
+    const float gw = GridW(), gh = GridH();
     if (m_cell >= 6)
     {
         for (int x = 0; x <= m_cols; x++) dl->AddLine(ImVec2(m_gx0 + x * m_cell, m_gy0), ImVec2(m_gx0 + x * m_cell, m_gy0 + gh), IM_COL32(255, 255, 255, 28));
         for (int y = 0; y <= m_rows; y++) dl->AddLine(ImVec2(m_gx0, m_gy0 + y * m_cell), ImVec2(m_gx0 + gw, m_gy0 + y * m_cell), IM_COL32(255, 255, 255, 28));
     }
     dl->AddRect(ImVec2(m_gx0, m_gy0), ImVec2(m_gx0 + gw, m_gy0 + gh), IM_COL32(255, 255, 255, 70));
+}
 
-    // ---- 고른 칸: 세 조각을 색으로 보여 준다 ----
-    const P2 P{ m_selX + 0.5, m_selY + 0.5 };
-    const ImVec2 sp = ToScreen(P);
+// 고른 칸: 세 조각(PBC, APC, ABP)을 색으로 보여 준다
+void RasterScene::DrawSelectedCell(ImDrawList* dl) const
+{
+    const ImVec2 sp = ToScreen(SelectedCenter());
     const ImVec2 sa = ToScreen(m_tri.v[0]), sb = ToScreen(m_tri.v[1]), sc = ToScreen(m_tri.v[2]);
     dl->AddTriangleFilled(sp, sb, sc, IM_COL32(255, 60, 60, 28));    // PBC -> A 의 몫
     dl->AddTriangleFilled(sa, sp, sc, IM_COL32(60, 255, 60, 28));    // APC -> B 의 몫
@@ -483,19 +588,19 @@ void RasterScene::OnCanvas(const Canvas& c)
     dl->AddLine(sp, sa, IM_COL32(255, 120, 120, 160), 1.0f);
     dl->AddLine(sp, sb, IM_COL32(120, 255, 120, 160), 1.0f);
     dl->AddLine(sp, sc, IM_COL32(120, 160, 255, 160), 1.0f);
-    {
-        ImVec2 a(m_gx0 + m_selX * m_cell, m_gy0 + m_selY * m_cell);
-        dl->AddRect(a, ImVec2(a.x + m_cell, a.y + m_cell), m_pinned ? IM_COL32(0, 230, 255, 255) : IM_COL32(255, 220, 0, 255), 0, 0, 2.0f);
-        dl->AddCircleFilled(sp, 3.0f, IM_COL32(255, 220, 0, 255));
-    }
+    ImVec2 a(m_gx0 + m_selX * m_cell, m_gy0 + m_selY * m_cell);
+    dl->AddRect(a, ImVec2(a.x + m_cell, a.y + m_cell), m_pinned ? IM_COL32(0, 230, 255, 255) : IM_COL32(255, 220, 0, 255), 0, 0, 2.0f);
+    dl->AddCircleFilled(sp, 3.0f, IM_COL32(255, 220, 0, 255));
+}
 
-    // ---- 삼각형 모서리 + 감는 방향 화살표 (A -> B -> C) ----
-    CellCalc whole = Evaluate(m_tri, P, m_cull, m_topLeft);
-    const ImU32 edgeCol = whole.culled ? IM_COL32(150, 150, 150, 200) : IM_COL32(255, 255, 255, 230);
-    const ImVec2 pts[3] = { sa, sb, sc };
+// 삼각형 모서리 + 감는 방향 화살표 (A -> B -> C)
+void RasterScene::DrawTriangleEdges(ImDrawList* dl, bool culled) const
+{
+    const float fs = ImGui::GetFontSize();
+    const ImU32 edgeCol = culled ? IM_COL32(150, 150, 150, 200) : IM_COL32(255, 255, 255, 230);
     for (int i = 0; i < 3; i++)
     {
-        ImVec2 p0 = pts[i], p1 = pts[(i + 1) % 3];
+        ImVec2 p0 = ToScreen(m_tri.v[i]), p1 = ToScreen(m_tri.v[(i + 1) % 3]);
         dl->AddLine(p0, p1, edgeCol, 2.0f);
         float dx = p1.x - p0.x, dy = p1.y - p0.y, len = std::sqrt(dx * dx + dy * dy);
         if (len < 1) continue;
@@ -506,20 +611,27 @@ void RasterScene::OnCanvas(const Canvas& c)
                               ImVec2(mid.x - dx * s - dy * s * 0.6f, mid.y - dy * s + dx * s * 0.6f),
                               ImVec2(mid.x - dx * s + dy * s * 0.6f, mid.y - dy * s - dx * s * 0.6f), edgeCol);
     }
+}
 
-    // ---- 꼭짓점 ----
+void RasterScene::DrawVertices(ImDrawList* dl) const
+{
+    const float fs = ImGui::GetFontSize();
     const ImU32 vcol[3] = { IM_COL32(255, 70, 70, 255), IM_COL32(70, 230, 70, 255), IM_COL32(80, 130, 255, 255) };
     const char* vname[3] = { "A", "B", "C" };
     for (int i = 0; i < 3; i++)
     {
+        const ImVec2 p = ToScreen(m_tri.v[i]);
         float r = fs * 0.45f;
-        dl->AddCircleFilled(pts[i], r, vcol[i]);
-        dl->AddCircle(pts[i], r, IM_COL32(255, 255, 255, 255), 0, (m_drag == i) ? 3.0f : 1.5f);
+        dl->AddCircleFilled(p, r, vcol[i]);
+        dl->AddCircle(p, r, IM_COL32(255, 255, 255, 255), 0, (m_drag == i) ? 3.0f : 1.5f);
         char lab[64]; snprintf(lab, sizeof lab, "%s (%.2f, %.2f)", vname[i], m_tri.v[i].x, m_tri.v[i].y);
-        dl->AddText(ImVec2(pts[i].x + r + 3, pts[i].y - fs * 0.5f), IM_COL32(255, 255, 255, 255), lab);
+        dl->AddText(ImVec2(p.x + r + 3, p.y - fs * 0.5f), IM_COL32(255, 255, 255, 255), lab);
     }
+}
 
-    // ---- 위쪽 안내 글 ----
+void RasterScene::DrawStatusText(ImDrawList* dl, const Canvas& c, const CellCalc& whole) const
+{
+    const float fs = ImGui::GetFontSize();
     const char* viewName[3] = { "CPU 계산 (내가 직접 무게를 구해서 칠함)", "GPU 진짜 결과 (DX12 래스터라이저가 칠함)", "비교: 흰 점 = CPU 가 칠한 칸, 분홍 테두리 = CPU 와 GPU 가 다른 칸" };
     dl->AddText(ImVec2(m_gx0, c.y + fs * 0.4f), IM_COL32(140, 200, 255, 255), viewName[m_view]);
     char status[256];
@@ -527,13 +639,10 @@ void RasterScene::OnCanvas(const Canvas& c)
     else if (whole.culled) snprintf(status, sizeof status, "%s 이라서 컬링됨 -> 칸을 계산하기도 전에 통째로 버림", whole.front ? "앞면(시계 방향)" : "뒷면(반시계 방향)");
     else snprintf(status, sizeof status, "%s · 꼭짓점을 끌어 보세요 · 칸을 누르면 그 칸 계산표가 고정돼요", whole.front ? "앞면(시계 방향)" : "뒷면(반시계 방향)");
     dl->AddText(ImVec2(m_gx0, c.y + fs * 1.7f), IM_COL32(220, 220, 220, 255), status);
-    ImGui::End();
-
-    DrawShaderEditor(m_sh, c);   // 셰이더 편집 창 (F2 로 열기/닫기)
 }
 
 // ---------------------------------------------------------------------
-// GPU 명령 기록
+// GPU 명령 기록 (Samples 의 PopulateCommandList 처럼 단계별로)
 // ---------------------------------------------------------------------
 void RasterScene::OnRender(ID3D12GraphicsCommandList* cl, const Canvas&)
 {
@@ -541,6 +650,14 @@ void RasterScene::OnRender(ID3D12GraphicsCommandList* cl, const Canvas&)
     if (m_lowCols != m_cols || m_lowRows != m_rows) CreateLowRes(m_cols, m_rows);
     if (!m_blitPso) return;                       // 처음부터 컴파일 실패: GPU 쪽은 못 그림 (에러는 편집 창에)
 
+    SetRootArguments(cl);          // 루트 시그니처 + 루트 상수(꼭짓점) + SRV 표
+    RenderTriangleToLowRes(cl);    // 1패스 [래스터-④]
+    CopyLowResToReadback(cl);      // 되읽기 [래스터-⑥]
+    DrawLowResToScreen(cl);        // 2패스 [래스터-⑤]
+}
+
+TriConstants RasterScene::MakeConstants() const
+{
     TriConstants k{};
     k.a[0] = (float)m_tri.v[0].x; k.a[1] = (float)m_tri.v[0].y;
     k.b[0] = (float)m_tri.v[1].x; k.b[1] = (float)m_tri.v[1].y;
@@ -548,15 +665,23 @@ void RasterScene::OnRender(ID3D12GraphicsCommandList* cl, const Canvas&)
     k.grid[0] = (float)m_cols; k.grid[1] = (float)m_rows;
     const float red[4] = { 1, 0, 0, 1 }, green[4] = { 0, 1, 0, 1 }, blue[4] = { 0, 0, 1, 1 };
     memcpy(k.colA, red, 16); memcpy(k.colB, green, 16); memcpy(k.colC, blue, 16);
+    return k;
+}
 
+void RasterScene::SetRootArguments(ID3D12GraphicsCommandList* cl)
+{
+    const TriConstants k = MakeConstants();
     ID3D12DescriptorHeap* heaps[] = { g_dx.srvHeap.Get() };
     cl->SetDescriptorHeaps(1, heaps);
     cl->SetGraphicsRootSignature(m_rootSig.Get());
     cl->SetGraphicsRoot32BitConstants(0, sizeof(TriConstants) / 4, &k, 0);
     cl->SetGraphicsRootDescriptorTable(1, m_lowSrvGpu);
     cl->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+}
 
-    // ===== [래스터-④] 1패스: 칸 수만큼의 작은 렌더 타깃에 진짜 삼각형 =====
+// ===== [래스터-④] 1패스: 칸 수만큼의 작은 렌더 타깃에 진짜 삼각형 =====
+void RasterScene::RenderTriangleToLowRes(ID3D12GraphicsCommandList* cl)
+{
     D3D12_RESOURCE_BARRIER b = Transition(m_low.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_RENDER_TARGET);
     cl->ResourceBarrier(1, &b);
     const float transparent[4] = { 0, 0, 0, 0 };
@@ -568,10 +693,13 @@ void RasterScene::OnRender(ID3D12GraphicsCommandList* cl, const Canvas&)
     cl->RSSetScissorRects(1, &lowSc);
     cl->SetPipelineState(m_triPso[m_cull].Get());
     cl->DrawInstanced(3, 1, 0, 0);             // 정점 3개 (SV_VertexID = 0, 1, 2)
+}
 
-    // ===== [래스터-⑥] 되읽기: 작은 그림을 Readback 버퍼로 복사 (CPU 는 2프레임 뒤에 읽음) =====
+// ===== [래스터-⑥] 되읽기: 작은 그림을 Readback 버퍼로 복사 (CPU 는 2프레임 뒤에 읽음) =====
+void RasterScene::CopyLowResToReadback(ID3D12GraphicsCommandList* cl)
+{
     Slot& s = m_slots[g_dx.frameIndex];
-    b = Transition(m_low.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_COPY_SOURCE);
+    D3D12_RESOURCE_BARRIER b = Transition(m_low.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_COPY_SOURCE);
     cl->ResourceBarrier(1, &b);
     D3D12_TEXTURE_COPY_LOCATION dst{}, src{};
     dst.pResource = s.readback.Get(); dst.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT; dst.PlacedFootprint = s.fp;
@@ -580,19 +708,20 @@ void RasterScene::OnRender(ID3D12GraphicsCommandList* cl, const Canvas&)
     s.valid = true; s.tri = m_tri; s.cols = m_cols; s.rows = m_rows; s.cull = m_cull; s.topLeft = m_topLeft; s.caseId = m_caseId;
     b = Transition(m_low.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
     cl->ResourceBarrier(1, &b);
+}
 
-    // ===== [래스터-⑤] 2패스: 작은 그림을 격자 영역에 크게 늘려 그리기 =====
+// ===== [래스터-⑤] 2패스: 작은 그림을 격자 영역에 크게 늘려 그리기 =====
+void RasterScene::DrawLowResToScreen(ID3D12GraphicsCommandList* cl)
+{
     D3D12_CPU_DESCRIPTOR_HANDLE rtv = CurrentBackBufferRtv();
     cl->OMSetRenderTargets(1, &rtv, FALSE, nullptr);
-    if (m_view != VIEW_CPU)
-    {
-        D3D12_VIEWPORT vp{ m_gx0, m_gy0, m_cols * m_cell, m_rows * m_cell, 0, 1 };
-        D3D12_RECT sc{ 0, 0, (LONG)g_dx.width, (LONG)g_dx.height };
-        cl->RSSetViewports(1, &vp);
-        cl->RSSetScissorRects(1, &sc);
-        cl->SetPipelineState(m_blitPso.Get());
-        cl->DrawInstanced(3, 1, 0, 0);
-    }
+    if (m_view == VIEW_CPU) return;   // CPU 계산 보기는 ImGui 가 칸을 칠한다
+    D3D12_VIEWPORT vp{ m_gx0, m_gy0, GridW(), GridH(), 0, 1 };
+    D3D12_RECT sc{ 0, 0, (LONG)g_dx.width, (LONG)g_dx.height };
+    cl->RSSetViewports(1, &vp);
+    cl->RSSetScissorRects(1, &sc);
+    cl->SetPipelineState(m_blitPso.Get());
+    cl->DrawInstanced(3, 1, 0, 0);
 }
 
 // ---------------------------------------------------------------------
@@ -614,7 +743,20 @@ static void Eli5(const char* title, const char* analogy, const char* meaning, co
 void RasterScene::OnPanel()
 {
     ImGui::TextWrapped("큰 칸 하나 = 진짜 픽셀 하나. 꼭짓점 A(빨강) B(초록) C(파랑)를 끌어 보고, 칸에 마우스를 올려 아래 계산표를 보세요.");
+    PanelSettings();
+    PanelShader();
+    const CellCalc cc = Evaluate(m_tri, SelectedCenter(), m_cull, m_topLeft);
+    PanelWholeTriangle(cc);   // ① 삼각형 전체 넓이
+    PanelCellTable(cc);       // ② 고른 칸 계산표
+    PanelCellVerdict(cc);
+    PanelCellColors(cc);
+    PanelCompare();           // ③ CPU vs GPU
+    PanelEli5();              // 쉽게 설명
+    PanelCodeFlow();
+}
 
+void RasterScene::PanelSettings()
+{
     ImGui::SeparatorText("설정");
     ImGui::TextUnformatted("보기"); ImGui::SameLine();
     ImGui::RadioButton("CPU 계산", &m_view, VIEW_CPU); ImGui::SameLine();
@@ -633,7 +775,10 @@ void RasterScene::OnPanel()
     if (ImGui::Button("처음 모양")) ResetShape();
     ImGui::SameLine();
     if (ImGui::Button("모서리 실험 모양")) EdgeShape();
+}
 
+void RasterScene::PanelShader()
+{
     ImGui::SeparatorText("셰이더 (raster.hlsl)");
     if (ImGui::Button(m_sh.editorOpen ? "셰이더 창 닫기 (F2)" : "셰이더 창 열기 (F2)")) m_sh.editorOpen = !m_sh.editorOpen;
     ImGui::SameLine();
@@ -641,11 +786,11 @@ void RasterScene::OnPanel()
     if (!m_sh.error.empty()) ImGui::TextColored(ImVec4(1, 0.45f, 0.45f, 1), "컴파일 에러: 셰이더 창을 보세요");
     else ImGui::TextColored(ImVec4(0.55f, 1, 0.55f, 1), "컴파일 성공 (%d번째) · 고치고 저장하면 바로 반영", m_sh.buildCount);
     ImGui::TextDisabled("GPU 결과 보기로 바꿔야 셰이더를 고친 효과가 보여요");
+}
 
-    // ---- ① 삼각형 전체 ----
+void RasterScene::PanelWholeTriangle(const CellCalc& cc)
+{
     const P2 A = m_tri.v[0], B = m_tri.v[1], C = m_tri.v[2];
-    const P2 P{ m_selX + 0.5, m_selY + 0.5 };
-    CellCalc cc = Evaluate(m_tri, P, m_cull, m_topLeft);
     ImGui::SeparatorText("① 삼각형 전체 넓이 (외적)");
     ImGui::Text("AB = B - A = (%.2f, %.2f)", B.x - A.x, B.y - A.y);
     ImGui::Text("AC = C - A = (%.2f, %.2f)", C.x - A.x, C.y - A.y);
@@ -656,78 +801,87 @@ void RasterScene::OnPanel()
     else ImGui::TextColored(cc.front ? ImVec4(0.6f, 1, 0.6f, 1) : ImVec4(1, 0.6f, 0.4f, 1), "부호 %s -> 화면에서 %s -> %s",
                             cc.front ? "+" : "-", cc.front ? "시계 방향" : "반시계 방향", cc.front ? "앞면" : "뒷면");
     if (cc.culled && cc.area2 != 0.0) ImGui::TextColored(ImVec4(1, 0.5f, 0.5f, 1), "컬링 설정 때문에 통째로 버려짐 (칸 계산 안 함)");
+}
 
-    // ---- ② 고른 칸 ----
+void RasterScene::PanelCellTable(const CellCalc& cc)
+{
+    const P2 P = SelectedCenter();
     ImGui::SeparatorText("② 고른 칸 계산표");
     ImGui::Text("칸 (%d, %d) -> 픽셀 중심 P = (%.1f, %.1f)%s", m_selX, m_selY, P.x, P.y, m_pinned ? "  [고정됨]" : "");
-    if (ImGui::BeginTable("w", 3, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp))
+    if (!ImGui::BeginTable("w", 3, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp)) return;
+    ImGui::TableSetupColumn("조각");
+    ImGui::TableSetupColumn("외적 (넓이 x2)");
+    ImGui::TableSetupColumn("무게 = 조각 / 전체");
+    ImGui::TableHeadersRow();
+    const char* names[3] = { "PBC (A의 맞은편)", "APC (B의 맞은편)", "ABP (C의 맞은편)" };
+    const char* wn[3] = { "wa", "wb", "wc" };
+    const ImVec4 colr[3] = { ImVec4(1, 0.45f, 0.45f, 1), ImVec4(0.45f, 1, 0.45f, 1), ImVec4(0.5f, 0.65f, 1, 1) };
+    for (int i = 0; i < 3; i++)
     {
-        ImGui::TableSetupColumn("조각");
-        ImGui::TableSetupColumn("외적 (넓이 x2)");
-        ImGui::TableSetupColumn("무게 = 조각 / 전체");
-        ImGui::TableHeadersRow();
-        const char* names[3] = { "PBC (A의 맞은편)", "APC (B의 맞은편)", "ABP (C의 맞은편)" };
-        const char* wn[3] = { "wa", "wb", "wc" };
-        const ImVec4 colr[3] = { ImVec4(1, 0.45f, 0.45f, 1), ImVec4(0.45f, 1, 0.45f, 1), ImVec4(0.5f, 0.65f, 1, 1) };
-        for (int i = 0; i < 3; i++)
-        {
-            ImGui::TableNextRow();
-            ImGui::TableNextColumn(); ImGui::TextColored(colr[i], "%s", names[i]);
-            ImGui::TableNextColumn(); ImGui::Text("%.3f", cc.e[i]);
-            ImGui::TableNextColumn();
-            if (cc.w[i] < 0) ImGui::TextColored(ImVec4(1, 0.4f, 0.4f, 1), "%s = %.3f (음수!)", wn[i], cc.w[i]);
-            else if (cc.onEdge[i]) ImGui::TextColored(ImVec4(1, 0.85f, 0.3f, 1), "%s = 0 (모서리 위)", wn[i]);
-            else ImGui::Text("%s = %.3f", wn[i], cc.w[i]);
-        }
         ImGui::TableNextRow();
-        ImGui::TableNextColumn(); ImGui::TextUnformatted("합");
-        ImGui::TableNextColumn(); ImGui::Text("%.3f", cc.e[0] + cc.e[1] + cc.e[2]);
-        ImGui::TableNextColumn(); ImGui::Text("%.3f", cc.w[0] + cc.w[1] + cc.w[2]);
-        ImGui::EndTable();
+        ImGui::TableNextColumn(); ImGui::TextColored(colr[i], "%s", names[i]);
+        ImGui::TableNextColumn(); ImGui::Text("%.3f", cc.e[i]);
+        ImGui::TableNextColumn();
+        if (cc.w[i] < 0) ImGui::TextColored(ImVec4(1, 0.4f, 0.4f, 1), "%s = %.3f (음수!)", wn[i], cc.w[i]);
+        else if (cc.onEdge[i]) ImGui::TextColored(ImVec4(1, 0.85f, 0.3f, 1), "%s = 0 (모서리 위)", wn[i]);
+        else ImGui::Text("%s = %.3f", wn[i], cc.w[i]);
     }
+    ImGui::TableNextRow();
+    ImGui::TableNextColumn(); ImGui::TextUnformatted("합");
+    ImGui::TableNextColumn(); ImGui::Text("%.3f", cc.e[0] + cc.e[1] + cc.e[2]);
+    ImGui::TableNextColumn(); ImGui::Text("%.3f", cc.w[0] + cc.w[1] + cc.w[2]);
+    ImGui::EndTable();
+}
+
+void RasterScene::PanelCellVerdict(const CellCalc& cc)
+{
     ImGui::TextDisabled("세 조각의 합 = 전체 외적 (%.3f), 무게의 합 = 1", cc.area2);
-    if (cc.culled) ImGui::TextWrapped("판정: 삼각형이 컬링돼서 이 칸도 안 칠함");
-    else if (cc.inside) ImGui::TextColored(ImVec4(0.6f, 1, 0.6f, 1), "판정: 무게가 모두 0 이상 -> 안쪽 -> 칠함");
-    else
-    {
-        bool edgeOnly = true;
-        for (int i = 0; i < 3; i++) { double s = cc.front ? cc.e[i] : -cc.e[i]; if (s < 0) edgeOnly = false; }
-        if (edgeOnly) ImGui::TextColored(ImVec4(1, 0.85f, 0.3f, 1), "판정: 모서리 위인데 위쪽/왼쪽 모서리가 아님 -> 탑-레프트 규칙으로 안 칠함");
-        else ImGui::TextColored(ImVec4(1, 0.5f, 0.5f, 1), "판정: 음수 무게가 있음 -> 바깥 -> 안 칠함");
-    }
+    if (cc.culled) { ImGui::TextWrapped("판정: 삼각형이 컬링돼서 이 칸도 안 칠함"); return; }
+    if (cc.inside) { ImGui::TextColored(ImVec4(0.6f, 1, 0.6f, 1), "판정: 무게가 모두 0 이상 -> 안쪽 -> 칠함"); return; }
+    bool edgeOnly = true;   // 음수 무게는 없고 0 만 있음 = 모서리 위
+    for (int i = 0; i < 3; i++) { double s = cc.front ? cc.e[i] : -cc.e[i]; if (s < 0) edgeOnly = false; }
+    if (edgeOnly) ImGui::TextColored(ImVec4(1, 0.85f, 0.3f, 1), "판정: 모서리 위인데 위쪽/왼쪽 모서리가 아님 -> 탑-레프트 규칙으로 안 칠함");
+    else ImGui::TextColored(ImVec4(1, 0.5f, 0.5f, 1), "판정: 음수 무게가 있음 -> 바깥 -> 안 칠함");
+}
+
+static void ColorSwatch(const char* id, unsigned char r, unsigned char g, unsigned char b)
+{
+    ImGui::SameLine();
+    ImGui::ColorButton(id, ImVec4(r / 255.f, g / 255.f, b / 255.f, 1), ImGuiColorEditFlags_NoTooltip, ImVec2(ImGui::GetFontSize() * 1.4f, ImGui::GetFontSize()));
+}
+
+// 고른 칸의 색: CPU 가 계산한 색과 GPU 가 실제로 칠한 색
+void RasterScene::PanelCellColors(const CellCalc& cc)
+{
     if (cc.inside)
     {
         unsigned char r = ToByte(cc.w[0]), g = ToByte(cc.w[1]), bl = ToByte(cc.w[2]);
         ImGui::Text("색 = wa*빨강 + wb*초록 + wc*파랑 = (%d, %d, %d)", r, g, bl);
-        ImGui::SameLine();
-        ImGui::ColorButton("##cpucol", ImVec4(r / 255.f, g / 255.f, bl / 255.f, 1), ImGuiColorEditFlags_NoTooltip, ImVec2(ImGui::GetFontSize() * 1.4f, ImGui::GetFontSize()));
+        ColorSwatch("##cpucol", r, g, bl);
     }
-    const bool cmpOk = m_cmp.valid && m_cmp.cols == m_cols && m_cmp.rows == m_rows;
-    if (cmpOk)
+    if (!CompareReady()) return;
+    const unsigned char* g = &m_cmp.gpu[((size_t)m_selY * m_cols + m_selX) * 4];
+    if (g[3] >= 128)
     {
-        const unsigned char* g = &m_cmp.gpu[((size_t)m_selY * m_cols + m_selX) * 4];
-        if (g[3] >= 128)
-        {
-            ImGui::Text("GPU 가 칠한 색 = (%d, %d, %d)", g[0], g[1], g[2]);
-            ImGui::SameLine();
-            ImGui::ColorButton("##gpucol", ImVec4(g[0] / 255.f, g[1] / 255.f, g[2] / 255.f, 1), ImGuiColorEditFlags_NoTooltip, ImVec2(ImGui::GetFontSize() * 1.4f, ImGui::GetFontSize()));
-        }
-        else ImGui::TextUnformatted("GPU: 이 칸은 안 칠함");
+        ImGui::Text("GPU 가 칠한 색 = (%d, %d, %d)", g[0], g[1], g[2]);
+        ColorSwatch("##gpucol", g[0], g[1], g[2]);
     }
+    else ImGui::TextUnformatted("GPU: 이 칸은 안 칠함");
+}
 
-    // ---- ③ 비교 ----
+void RasterScene::PanelCompare()
+{
     ImGui::SeparatorText("③ CPU 계산 vs GPU 진짜 결과");
-    if (cmpOk)
-    {
-        ImGui::Text("칠한 칸: CPU %d개 / GPU %d개", m_cmp.cpuCount, m_cmp.gpuCount);
-        if (m_cmp.diffCount == 0) ImGui::TextColored(ImVec4(0.6f, 1, 0.6f, 1), "다른 칸 0개 -> GPU 도 똑같은 계산을 해요!");
-        else ImGui::TextColored(ImVec4(1, 0.5f, 1, 1), "다른 칸 %d개 (비교 보기에서 분홍 테두리)", m_cmp.diffCount);
-        ImGui::Text("같은 칸의 색 차이: 최대 %d / 255", m_cmp.maxColorDiff);
-        if (m_cmp.diffCount > 0 && !m_topLeft) ImGui::TextWrapped("탑-레프트 규칙을 껐기 때문이에요. GPU 는 항상 이 규칙을 써요. 다시 켜 보세요.");
-    }
-    else ImGui::TextDisabled("GPU 결과를 기다리는 중...");
+    if (!CompareReady()) { ImGui::TextDisabled("GPU 결과를 기다리는 중..."); return; }
+    ImGui::Text("칠한 칸: CPU %d개 / GPU %d개", m_cmp.cpuCount, m_cmp.gpuCount);
+    if (m_cmp.diffCount == 0) ImGui::TextColored(ImVec4(0.6f, 1, 0.6f, 1), "다른 칸 0개 -> GPU 도 똑같은 계산을 해요!");
+    else ImGui::TextColored(ImVec4(1, 0.5f, 1, 1), "다른 칸 %d개 (비교 보기에서 분홍 테두리)", m_cmp.diffCount);
+    ImGui::Text("같은 칸의 색 차이: 최대 %d / 255", m_cmp.maxColorDiff);
+    if (m_cmp.diffCount > 0 && !m_topLeft) ImGui::TextWrapped("탑-레프트 규칙을 껐기 때문이에요. GPU 는 항상 이 규칙을 써요. 다시 켜 보세요.");
+}
 
-    // ---- 쉽게 설명 ----
+void RasterScene::PanelEli5()
+{
     ImGui::SeparatorText("쉽게 설명 (눌러서 펼치기)");
     Eli5("래스터라이저 (Rasterizer)",
          "모눈종이에 삼각형을 그려 놓고, 칸마다 \"이 칸 한가운데 점이 삼각형 안에 있나?\"를 물어서 안이면 색칠하는 사람이에요.",
@@ -771,15 +925,17 @@ void RasterScene::OnPanel()
          "아주 작은 차이로 결과가 들쭉날쭉하지 않게 고정된 정밀도로 계산해요.",
          "고정된 눈금이면 같은 입력에 항상 같은 결과가 나오고, 하드웨어가 정수로 빠르게 계산할 수 있어요.",
          "그래서 이 앱의 꼭짓점 좌표도 항상 1/256 칸 단위로 맞춰 둬요. 그래야 CPU 와 GPU 결과가 칸 하나까지 같아요.");
-    if (ImGui::CollapsingHeader("이 장면의 DX12 코드 흐름"))
-    {
-        ImGui::Indent();
-        ImGui::TextWrapped("1패스 [래스터-④]: 칸 수만큼 작은 렌더 타깃(예: %d x %d 픽셀)에 진짜 삼각형을 그려요. 정점 버퍼가 없어요. 꼭짓점 좌표는 루트 상수(Root Constants, 20개)로 보내고, VS 가 SV_VertexID(0, 1, 2)로 골라 써요. 컬링은 PSO 3개 중 하나를 골라서 바꿔요.", m_cols, m_rows);
-        ImGui::TextWrapped("2패스 [래스터-⑤]: 그 작은 그림을 화면의 격자 영역에 크게 늘려 그려요. 샘플러를 POINT(가장 가까운 픽셀 하나)로 해서 칸이 흐려지지 않아요.");
-        ImGui::TextWrapped("되읽기 [래스터-⑥]: 작은 그림을 Readback 힙 버퍼(시스템 RAM)로 복사하고, 그 프레임 자원 세트가 다시 돌아오면(2프레임 뒤) CPU 가 읽어서 칸마다 CPU 계산과 비교해요.");
-        ImGui::TextWrapped("CPU 계산 [래스터-①②③]: Evaluate() 함수 하나에 외적, 무게, 컬링, 탑-레프트 규칙이 다 있어요.");
-        ImGui::Unindent();
-    }
+}
+
+void RasterScene::PanelCodeFlow()
+{
+    if (!ImGui::CollapsingHeader("이 장면의 DX12 코드 흐름")) return;
+    ImGui::Indent();
+    ImGui::TextWrapped("1패스 [래스터-④] RenderTriangleToLowRes(): 칸 수만큼 작은 렌더 타깃(예: %d x %d 픽셀)에 진짜 삼각형을 그려요. 정점 버퍼가 없어요. 꼭짓점 좌표는 루트 상수(Root Constants, 20개)로 보내고, VS 가 SV_VertexID(0, 1, 2)로 골라 써요. 컬링은 PSO 3개 중 하나를 골라서 바꿔요.", m_cols, m_rows);
+    ImGui::TextWrapped("2패스 [래스터-⑤] DrawLowResToScreen(): 그 작은 그림을 화면의 격자 영역에 크게 늘려 그려요. 샘플러를 POINT(가장 가까운 픽셀 하나)로 해서 칸이 흐려지지 않아요.");
+    ImGui::TextWrapped("되읽기 [래스터-⑥] CopyLowResToReadback(): 작은 그림을 Readback 힙 버퍼(시스템 RAM)로 복사하고, 그 프레임 자원 세트가 다시 돌아오면(2프레임 뒤) OnFrameReused() 에서 CPU 가 읽어서 칸마다 CPU 계산과 비교해요.");
+    ImGui::TextWrapped("CPU 계산 [래스터-①②③]: Evaluate() 함수 하나에 외적, 무게, 컬링, 탑-레프트 규칙이 다 있어요.");
+    ImGui::Unindent();
 }
 
 // ---------------------------------------------------------------------
@@ -822,29 +978,40 @@ bool RasterScene::AutoTest(int frame, int& failures)
     m_testWait++;
     if (m_cmp.valid && m_cmp.caseId == m_caseId && m_cmp.cols == m_cols && m_cmp.rows == m_rows)
     {
-        bool expectDiff = !m_topLeft;   // 마지막 케이스: 규칙을 끈 CPU 는 GPU 와 달라야 정상
-        bool fail = (expectDiff ? m_cmp.diffCount == 0 : m_cmp.diffCount != 0) || m_cmp.maxColorDiff > 2;
-        FILE* f = fopen("lab_autotest.log", "a");
-        if (f)
-        {
-            fprintf(f, "raster case %2d cols=%d rows=%d cull=%d snap=%d topLeft=%d A(%.3f,%.3f) B(%.3f,%.3f) C(%.3f,%.3f) cpu=%d gpu=%d diff=%d colorDiff=%d %s\n",
-                    m_testCase, m_cols, m_rows, m_cull, m_snap, (int)m_topLeft, m_tri.v[0].x, m_tri.v[0].y, m_tri.v[1].x, m_tri.v[1].y, m_tri.v[2].x, m_tri.v[2].y,
-                    m_cmp.cpuCount, m_cmp.gpuCount, m_cmp.diffCount, m_cmp.maxColorDiff, fail ? "FAIL" : "ok");
-            fclose(f);
-        }
-        if (fail) failures++;
-        if (++m_testCase >= kTestCases) return true;
-        ApplyTestCase(m_testCase);
-        m_testWait = 0;
+        if (!CheckAndLogTestCase()) failures++;
+        return NextTestCase();
     }
-    else if (m_testWait > 60)
+    if (m_testWait > 60)
     {
         failures++;
         FILE* f = fopen("lab_autotest.log", "a"); if (f) { fprintf(f, "raster case %d TIMEOUT\n", m_testCase); fclose(f); }
-        if (++m_testCase >= kTestCases) return true;
-        ApplyTestCase(m_testCase);
-        m_testWait = 0;
+        return NextTestCase();
     }
+    return false;
+}
+
+// 지금 케이스의 비교 결과를 판정하고 로그에 한 줄 남긴다. 통과면 true
+bool RasterScene::CheckAndLogTestCase()
+{
+    bool expectDiff = !m_topLeft;   // 마지막 케이스: 규칙을 끈 CPU 는 GPU 와 달라야 정상
+    bool fail = (expectDiff ? m_cmp.diffCount == 0 : m_cmp.diffCount != 0) || m_cmp.maxColorDiff > 2;
+    FILE* f = fopen("lab_autotest.log", "a");
+    if (f)
+    {
+        fprintf(f, "raster case %2d cols=%d rows=%d cull=%d snap=%d topLeft=%d A(%.3f,%.3f) B(%.3f,%.3f) C(%.3f,%.3f) cpu=%d gpu=%d diff=%d colorDiff=%d %s\n",
+                m_testCase, m_cols, m_rows, m_cull, m_snap, (int)m_topLeft, m_tri.v[0].x, m_tri.v[0].y, m_tri.v[1].x, m_tri.v[1].y, m_tri.v[2].x, m_tri.v[2].y,
+                m_cmp.cpuCount, m_cmp.gpuCount, m_cmp.diffCount, m_cmp.maxColorDiff, fail ? "FAIL" : "ok");
+        fclose(f);
+    }
+    return !fail;
+}
+
+// 다음 케이스로. 다 했으면 true
+bool RasterScene::NextTestCase()
+{
+    if (++m_testCase >= kTestCases) return true;
+    ApplyTestCase(m_testCase);
+    m_testWait = 0;
     return false;
 }
 

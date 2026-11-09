@@ -116,33 +116,21 @@ static LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
     return DefWindowProcW(hWnd, msg, wParam, lParam);
 }
 
-int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int)
+static HWND CreateMainWindow(HINSTANCE hInst)
 {
-    ImGui_ImplWin32_EnableDpiAwareness();
-    g_dpi = ImGui_ImplWin32_GetDpiScaleForMonitor(MonitorFromPoint(POINT{ 0, 0 }, MONITOR_DEFAULTTOPRIMARY));
-
     WNDCLASSEXW wc{ sizeof(wc), CS_CLASSDC, WndProc, 0, 0, hInst, nullptr, LoadCursor(nullptr, IDC_ARROW), nullptr, nullptr, L"DX12StudyLab", nullptr };
     RegisterClassExW(&wc);
     HWND hwnd = CreateWindowW(wc.lpszClassName, L"DX12 학습 실습 앱", WS_OVERLAPPEDWINDOW, 60, 60,
                               (int)(1500 * g_dpi), (int)(900 * g_dpi), nullptr, nullptr, hInst, nullptr);
-    InitD3D(hwnd);
-    ShowWindow(hwnd, SW_SHOWDEFAULT);
-    UpdateWindow(hwnd);
+    return hwnd;
+}
 
-    IMGUI_CHECKVERSION();
-    ImGui::CreateContext();
-    ImGuiIO& io = ImGui::GetIO();
-    io.IniFilename = nullptr;
-    ImGui::StyleColorsDark();
-    ImGuiStyle& style = ImGui::GetStyle();
-    style.ScaleAllSizes(g_dpi);
-    style.FontScaleDpi = g_dpi;
-    style.FontSizeBase = 17.0f;
-    style.WindowRounding = 0.0f;
-    const char* kFont = "C:\\Windows\\Fonts\\malgun.ttf";   // 한글: 맑은 고딕
+// 글꼴: 한글은 맑은 고딕, 셰이더 창은 Consolas + 한글은 맑은 고딕으로 채움
+static void LoadFonts(ImGuiIO& io)
+{
+    const char* kFont = "C:\\Windows\\Fonts\\malgun.ttf";
     if (GetFileAttributesA(kFont) == INVALID_FILE_ATTRIBUTES || !io.Fonts->AddFontFromFileTTF(kFont))
         io.Fonts->AddFontDefault();
-    // 셰이더 편집 창용 고정폭 글꼴: Consolas + 한글은 맑은 고딕으로 채움
     const char* kMono = "C:\\Windows\\Fonts\\consola.ttf";
     if (GetFileAttributesA(kMono) != INVALID_FILE_ATTRIBUTES)
     {
@@ -153,6 +141,21 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int)
             io.Fonts->AddFontFromFileTTF(kFont, 0.0f, &merge);
         }
     }
+}
+
+static void InitImGui(HWND hwnd)
+{
+    IMGUI_CHECKVERSION();
+    ImGui::CreateContext();
+    ImGuiIO& io = ImGui::GetIO();
+    io.IniFilename = nullptr;
+    ImGui::StyleColorsDark();
+    ImGuiStyle& style = ImGui::GetStyle();
+    style.ScaleAllSizes(g_dpi);
+    style.FontScaleDpi = g_dpi;
+    style.FontSizeBase = 17.0f;
+    style.WindowRounding = 0.0f;
+    LoadFonts(io);
 
     ImGui_ImplWin32_Init(hwnd);
     ImGui_ImplDX12_InitInfo ii;
@@ -165,60 +168,78 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int)
     ii.SrvDescriptorAllocFn = [](ImGui_ImplDX12_InitInfo*, D3D12_CPU_DESCRIPTOR_HANDLE* c, D3D12_GPU_DESCRIPTOR_HANDLE* g) { AllocSrv(c, g); };
     ii.SrvDescriptorFreeFn  = [](ImGui_ImplDX12_InitInfo*, D3D12_CPU_DESCRIPTOR_HANDLE c, D3D12_GPU_DESCRIPTOR_HANDLE) { FreeSrv(c); };
     ImGui_ImplDX12_Init(&ii);
+}
 
-    SwitchScene(0);
+// 창 메시지를 다 처리한다. 창이 닫혔으면 false
+static bool PumpMessages()
+{
+    MSG msg;
+    bool alive = true;
+    while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE))
+    {
+        TranslateMessage(&msg);
+        DispatchMessageW(&msg);
+        if (msg.message == WM_QUIT) alive = false;
+    }
+    return alive;
+}
 
-    // 개발용 자동 테스트: LAB_AUTOTEST=1 이면 장면마다 AutoTest 를 돌리고 결과를 남긴 뒤 끝낸다
+// 한 프레임: 되읽기 결과 꺼내기 -> UI -> 장면 GPU 명령 -> ImGui + Present
+static void RenderOneFrame()
+{
+    static const float clear[4] = { 0.06f, 0.06f, 0.08f, 1.0f };
+    ImGuiIO& io = ImGui::GetIO();
+
+    // 1) 이 프레임 자원 세트가 비었으면 장면이 되읽기 결과를 꺼낸다
+    WaitCurrentFrameSlot();
+    g_scene->OnFrameReused(g_dx.frameIndex);
+
+    // 2) UI
+    ImGui_ImplDX12_NewFrame();
+    ImGui_ImplWin32_NewFrame();
+    ImGui::NewFrame();
+    float panelW = std::min(g_panelWidth * g_dpi, io.DisplaySize.x * 0.6f);
+    Canvas canvas{ 0, 0, std::max(1.0f, io.DisplaySize.x - panelW), std::max(1.0f, io.DisplaySize.y) };
+    DrawPanel(panelW);
+    g_scene->OnCanvas(canvas);
+    ImGui::Render();
+
+    // 3) GPU 명령 기록 -> 4) ImGui 덮어 그리기 + Present
+    ID3D12GraphicsCommandList* cl = BeginFrame(clear);
+    g_scene->OnRender(cl, canvas);
+    EndFrame();
+}
+
+// 개발용 자동 테스트: 장면의 AutoTest 를 한 걸음 돌리고, 끝났으면 결과를 남기고 true
+static bool AutoTestStep(int& testFrame, int& failures)
+{
+    if (!g_scene->AutoTest(testFrame++, failures) && testFrame <= 5000) return false;
+    char line[128]; snprintf(line, sizeof line, "LAB_AUTOTEST %s failures=%d frames=%d\n", failures ? "FAIL" : "PASS", failures, testFrame);
+    FILE* f = fopen("lab_autotest.log", "a"); if (f) { fputs(line, f); fclose(f); }
+    OutputDebugStringA(line);
+    return true;
+}
+
+// 메인 루프. 돌려주는 값 = 자동 테스트 실패 수
+static int RunMainLoop(HWND hwnd)
+{
+    // LAB_AUTOTEST=1 이면 장면마다 AutoTest 를 돌리고 결과를 남긴 뒤 끝낸다
     const bool autotest = GetEnvironmentVariableA("LAB_AUTOTEST", nullptr, 0) > 0;
     int testFrame = 0, failures = 0;
     if (autotest) g_dx.vsync = false;
 
-    const float clear[4] = { 0.06f, 0.06f, 0.08f, 1.0f };
-    bool done = false;
-    while (!done)
+    while (PumpMessages())
     {
-        MSG msg;
-        while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE))
-        {
-            TranslateMessage(&msg);
-            DispatchMessageW(&msg);
-            if (msg.message == WM_QUIT) done = true;
-        }
-        if (done) break;
         if (IsIconic(hwnd)) { Sleep(16); continue; }
         if (g_resizePending) { g_resizePending = false; ResizeSwapChain(g_newW, g_newH); }
-
-        // 1) 이 프레임 자원 세트가 비었으면 장면이 되읽기 결과를 꺼낸다
-        WaitCurrentFrameSlot();
-        g_scene->OnFrameReused(g_dx.frameIndex);
-
-        // 2) UI
-        ImGui_ImplDX12_NewFrame();
-        ImGui_ImplWin32_NewFrame();
-        ImGui::NewFrame();
-        float panelW = std::min(g_panelWidth * g_dpi, io.DisplaySize.x * 0.6f);
-        Canvas canvas{ 0, 0, std::max(1.0f, io.DisplaySize.x - panelW), std::max(1.0f, io.DisplaySize.y) };
-        DrawPanel(panelW);
-        g_scene->OnCanvas(canvas);
-        ImGui::Render();
-
-        // 3) GPU 명령 기록 -> 4) ImGui 덮어 그리기 + Present
-        ID3D12GraphicsCommandList* cl = BeginFrame(clear);
-        g_scene->OnRender(cl, canvas);
-        EndFrame();
-
-        if (autotest)
-        {
-            if (g_scene->AutoTest(testFrame++, failures) || testFrame > 5000)
-            {
-                char line[128]; snprintf(line, sizeof line, "LAB_AUTOTEST %s failures=%d frames=%d\n", failures ? "FAIL" : "PASS", failures, testFrame);
-                FILE* f = fopen("lab_autotest.log", "a"); if (f) { fputs(line, f); fclose(f); }
-                OutputDebugStringA(line);
-                done = true;
-            }
-        }
+        RenderOneFrame();
+        if (autotest && AutoTestStep(testFrame, failures)) break;
     }
+    return failures;
+}
 
+static void Shutdown()
+{
     WaitIdle();
     if (g_scene) g_scene->Shutdown();
     g_scene.reset();
@@ -226,5 +247,22 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int)
     ImGui_ImplWin32_Shutdown();
     ImGui::DestroyContext();
     ShutdownD3D();
+}
+
+// DirectX-Graphics-Samples 의 Win32Application::Run 처럼: 창 -> 초기화 -> 루프 -> 정리
+int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int)
+{
+    ImGui_ImplWin32_EnableDpiAwareness();
+    g_dpi = ImGui_ImplWin32_GetDpiScaleForMonitor(MonitorFromPoint(POINT{ 0, 0 }, MONITOR_DEFAULTTOPRIMARY));
+
+    HWND hwnd = CreateMainWindow(hInst);
+    InitD3D(hwnd);
+    ShowWindow(hwnd, SW_SHOWDEFAULT);
+    UpdateWindow(hwnd);
+    InitImGui(hwnd);
+    SwitchScene(0);
+
+    int failures = RunMainLoop(hwnd);
+    Shutdown();
     return failures ? 2 : 0;
 }
