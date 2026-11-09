@@ -1,0 +1,26 @@
+# 빌드 결과물 (build.bat 이 만드는 폴더) - 저장소에 넣지 않음
+build/
+out/
+*.exe
+*.pdb
+*.ilk
+*.obj
+*.o
+
+# Visual Studio / VS Code 개인 설정
+.vs/
+.vscode/
+*.user
+*.suo
+CMakeSettings.json
+CMakeUserPresets.json
+
+# 실행하면 생기는 파일
+lab_autotest.log
+demo_autotest.log
+imgui.ini
+
+# OS 잡동사니
+Thumbs.db
+Desktop.ini
+.DS_Store

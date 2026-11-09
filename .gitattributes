@@ -1,0 +1,5 @@
+* text=auto
+# 배치 파일은 Windows 줄바꿈(CRLF)이어야 cmd 가 한글/라벨을 제대로 읽는다
+*.bat text eol=crlf
+*.png binary
+*.jpg binary
