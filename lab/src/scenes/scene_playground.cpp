@@ -15,6 +15,7 @@
 // =====================================================================
 #include "../scene.h"
 #include "../shader_file.h"
+#include "../ui_help.h"
 #include "imgui.h"
 #include <algorithm>
 #include <cmath>
@@ -236,6 +237,10 @@ void PlaygroundScene::PanelTime()
     ImGui::SameLine();
     ImGui::SetNextItemWidth(ImGui::GetFontSize() * 10);
     ImGui::SliderFloat("빠르기", &m_speed, 0.0f, 4.0f, "%.2f배");
+    Help("iTime(셰이더가 받는 시간)을 조절해요.\n"
+         "멈춤 = iTime 이 그대로 -> 시간으로 움직이던 원이 멈춰요. 셰이더 안에서 \"시간\" 정보는 iTime 하나뿐이라는 걸 확인할 수 있어요.\n"
+         "0초로 = iTime, iFrame 을 0 으로. sin(iTime) = 0 이라 원이 가운데에서 다시 출발해요.\n"
+         "빠르기 = 실제 시간보다 몇 배로 흐를지. 0 이면 멈춘 것과 같아요.");
 }
 
 void PlaygroundScene::PanelShader()
@@ -253,6 +258,9 @@ void PlaygroundScene::PanelShader()
 void PlaygroundScene::PanelValues()
 {
     ImGui::SeparatorText("지금 셰이더가 받는 값 (루트 상수 8개)");
+    AboutHelp("C++ 이 매 프레임 GPU 에 넘기는 숫자 8개의 실제 값이에요. Shadertoy 의 iResolution, iTime, iFrame, iMouse 와 같은 것.\n"
+              "한 프레임 동안 모든 픽셀이 똑같은 값을 받아요 (uniform). 픽셀마다 다른 입력은 fragCoord 하나뿐.\n"
+              "그림 영역을 누른 채 끌면 iMouse 가 바뀌고, 멈춤을 누르면 iTime 이 멈추는 걸 여기서 볼 수 있어요.");
     if (!ImGui::BeginTable("vals", 3, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp)) return;
     ImGui::TableSetupColumn("Shadertoy");
     ImGui::TableSetupColumn("여기 (HLSL)");

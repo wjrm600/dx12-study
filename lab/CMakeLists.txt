@@ -17,6 +17,7 @@ add_executable(DX12StudyLab WIN32
     src/core.cpp
     src/core.h
     src/shader_file.cpp
+    src/ui_help.cpp
     src/shader_file.h
     src/scene.h
     ${SCENE_SOURCES}

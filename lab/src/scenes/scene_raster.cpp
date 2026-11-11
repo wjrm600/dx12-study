@@ -17,6 +17,7 @@
 // =====================================================================
 #include "../scene.h"
 #include "../shader_file.h"
+#include "../ui_help.h"
 #include "imgui.h"
 #include <algorithm>
 #include <cmath>
@@ -217,6 +218,10 @@ private:
 
     // OnPanel 단계
     void PanelSettings();
+    void PanelViewMode();
+    void PanelGridAndSnap();
+    void PanelCullAndRules();
+    void PanelShapeButtons();
     void PanelShader();
     void PanelWholeTriangle(const CellCalc& cc);
     void PanelCellTable(const CellCalc& cc);
@@ -767,23 +772,81 @@ void RasterScene::OnPanel()
 void RasterScene::PanelSettings()
 {
     ImGui::SeparatorText("설정");
-    ImGui::TextUnformatted("보기"); ImGui::SameLine();
-    ImGui::RadioButton("CPU 계산", &m_view, VIEW_CPU); ImGui::SameLine();
-    ImGui::RadioButton("GPU 결과", &m_view, VIEW_GPU); ImGui::SameLine();
+    PanelViewMode();
+    PanelGridAndSnap();
+    PanelCullAndRules();
+    PanelShapeButtons();
+}
+
+// 보기 3가지: 같은 삼각형을 누가 칠했나 (CPU 정답지 / 진짜 GPU / 둘을 겹쳐 비교)
+void RasterScene::PanelViewMode()
+{
+    ImGui::TextUnformatted("보기 (같은 삼각형을 누가 칠했나)");
+    ImGui::RadioButton("CPU 계산", &m_view, VIEW_CPU);
+    Help("앱(C++)이 칸마다 직접 외적으로 무게 wa, wb, wc 를 계산해서 칠한 그림이에요. "
+         "GPU 래스터라이저가 속에서 몰래 하는 계산을 눈에 보이게 풀어 놓은 \"정답지\"예요.\n"
+         "칸 색 = (wa, wb, wc) 를 (빨강, 초록, 파랑) 으로 쓴 것. A 에 가까운 칸일수록 빨개요.\n"
+         "셰이더를 안 쓰기 때문에 raster.hlsl 을 고쳐도 이 그림은 안 바뀌어요.\n"
+         "볼 것: 칸에 마우스를 올리면 아래 ② 계산표가 그 칸의 외적과 무게를 보여 줘요.");
+    ImGui::RadioButton("GPU 결과", &m_view, VIEW_GPU);
+    Help("같은 삼각형을 진짜 DX12 파이프라인(TriVS -> 래스터라이저 -> TriPS)으로 작은 그림(가로 칸 수 x 세로 칸 수 픽셀)에 그린 뒤, "
+         "BlitVS/BlitPS 로 크게 늘려 보여 준 거예요. 칸 하나 = 진짜 픽셀 하나.\n"
+         "셰이더 창에서 raster.hlsl 을 고치면 이 그림이 바로 바뀌어요. 셰이더 실험은 이 보기에서 하세요.\n"
+         "볼 것: CPU 계산 보기와 칸 하나까지 똑같이 생겼다는 점. 하드웨어도 같은 계산을 한다는 뜻이에요.");
     ImGui::RadioButton("비교", &m_view, VIEW_COMPARE);
+    Help("GPU 그림 위에 CPU 판정을 겹쳐요.\n"
+         "흰 점 = CPU 가 \"칠한다\"고 계산한 칸.  분홍 테두리 = CPU 와 GPU 판정이 다른 칸.\n"
+         "평소에는 분홍이 0개예요. GPU 래스터라이저가 CPU 와 같은 외적 계산을 한다는 증거예요 (개수는 아래 ③).\n"
+         "일부러 달라지게 하려면: 탑-레프트 규칙을 끄고 \"모서리 실험 모양\"을 누르거나, 셰이더 실험 ④ discard 를 해 보세요.");
+}
+
+void RasterScene::PanelGridAndSnap()
+{
     int cols = m_cols;
     if (ImGui::SliderInt("가로 칸 수", &cols, kMinCols, kMaxCols)) SetCols(cols);
+    Help("격자의 칸 수 = GPU 가 그리는 작은 그림의 가로 픽셀 수예요 (세로는 창 높이에 맞춰 자동).\n"
+         "작게 하면 칸(픽셀)이 커져서 계단 모양과 \"칸 가운데 점이 안에 있나\" 판정이 잘 보여요. "
+         "크게 하면 칸이 작아져서 진짜 화면처럼 매끈해 보여요.\n"
+         "볼 것: 6칸과 64칸에서 같은 삼각형이 어떻게 보이는지. 이게 해상도의 차이예요.");
     const char* snaps[3] = { "자유 (1/256칸)", "0.5칸 (픽셀 중심/경계)", "1칸" };
     if (ImGui::Combo("꼭짓점 붙이기", &m_snap, snaps, 3)) { ClampAndSnap(); m_caseId++; }
-    ImGui::TextUnformatted("컬링"); ImGui::SameLine();
-    if (ImGui::RadioButton("없음", &m_cull, CULLK_NONE)) m_caseId++; ImGui::SameLine();
-    if (ImGui::RadioButton("뒷면 (BACK)", &m_cull, CULLK_BACK)) m_caseId++; ImGui::SameLine();
+    Help("꼭짓점을 끌 때 어떤 눈금에 맞춰 놓을지 정해요.\n"
+         "자유 (1/256칸) = GPU 가 실제로 쓰는 가장 작은 눈금. 거의 아무 데나 놓여요.\n"
+         "0.5칸 = 꼭짓점이 칸 중심이나 칸 경계에만 놓여요. 모서리가 칸 중심을 정확히 지나는 경우가 자주 생겨서 탑-레프트 규칙을 보기 좋아요.\n"
+         "1칸 = 격자선이 만나는 점에만 놓여요.\n"
+         "볼 것: 0.5칸에서 ② 계산표에 \"0 (모서리 위)\" 가 노랗게 나오는 칸.");
+}
+
+void RasterScene::PanelCullAndRules()
+{
+    ImGui::TextUnformatted("컬링 (뒤집힌 삼각형 버리기)");
+    if (ImGui::RadioButton("없음", &m_cull, CULLK_NONE)) m_caseId++;
+    Help("앞면이든 뒷면이든 다 그려요. A -> B -> C 가 화면에서 시계 방향이든 반시계 방향이든 보여요.");
+    if (ImGui::RadioButton("뒷면 (BACK)", &m_cull, CULLK_BACK)) m_caseId++;
+    Help("화면에서 반시계 방향으로 감긴 삼각형(뒷면)을 칸 계산을 하기도 전에 통째로 버려요. DX12 기본값이에요.\n"
+         "판정은 ① 의 외적 부호로 해요 (+ = 시계 = 앞면, - = 반시계 = 뒷면).\n"
+         "볼 것: 이걸 고른 뒤 \"B와 C 바꾸기\"를 누르면 삼각형이 통째로 사라져요. 큐브의 안 보이는 뒷면을 안 그리려고 써요 (로드맵 4단계).");
     if (ImGui::RadioButton("앞면 (FRONT)", &m_cull, CULLK_FRONT)) m_caseId++;
+    Help("반대로 시계 방향(앞면) 삼각형을 버려요. 지금 삼각형은 시계 방향이라 사라지고, \"B와 C 바꾸기\"를 누르면 다시 나타나요.\n"
+         "컬링은 PSO 안에 들어 있는 설정(CullMode)이라, 이걸 바꾸면 미리 만들어 둔 PSO 3개 중 다른 것을 끼워요.");
     if (ImGui::Checkbox("탑-레프트 규칙 (CPU 계산에 적용)", &m_topLeft)) m_caseId++;
+    Help("칸 중심이 모서리 위에 \"딱\" 걸쳤을 때(무게가 정확히 0) 그 칸을 칠할지 정하는 규칙이에요.\n"
+         "그 모서리가 삼각형의 위쪽 수평 모서리이거나 왼쪽 모서리일 때만 칠해요.\n"
+         "왜: 두 삼각형이 모서리를 같이 쓸 때(사각형 = 삼각형 2개) 같은 칸을 두 번 칠하거나, 아무도 안 칠해서 틈이 생기는 걸 막아요.\n"
+         "이 체크는 CPU 계산에만 적용돼요. GPU 는 항상 이 규칙을 써요.\n"
+         "볼 것: \"모서리 실험 모양\"을 누르고 비교 보기에서 이걸 끄면 오른쪽 아래 빗변 위 칸들이 분홍(다름)이 돼요.");
+}
+
+void RasterScene::PanelShapeButtons()
+{
     if (ImGui::Button("B와 C 바꾸기 (감는 방향 뒤집기)")) { std::swap(m_tri.v[1], m_tri.v[2]); m_caseId++; }
+    Help("꼭짓점 순서를 A -> B -> C 에서 A -> C -> B 로 바꿔요. 모양은 그대로인데 감는 방향이 뒤집혀서 ① 의 외적 부호가 + <-> - 로 바뀌어요.\n"
+         "컬링(뒷면/앞면)과 같이 써 보세요.");
     if (ImGui::Button("처음 모양")) ResetShape();
-    ImGui::SameLine();
+    Help("삼각형을 처음 모양(화면에서 시계 방향 = 앞면)으로 되돌려요.");
     if (ImGui::Button("모서리 실험 모양")) EdgeShape();
+    Help("모서리가 칸 중심을 정확히 지나가는 직각삼각형을 만들어요 (꼭짓점 붙이기도 0.5칸으로 바뀜).\n"
+         "위쪽 수평 모서리, 왼쪽 세로 모서리, 오른쪽 아래 빗변 위에 \"모서리 위\" 칸이 줄지어 생겨서 탑-레프트 규칙을 실험하기 좋아요.");
 }
 
 void RasterScene::PanelShader()
@@ -801,6 +864,10 @@ void RasterScene::PanelWholeTriangle(const CellCalc& cc)
 {
     const P2 A = m_tri.v[0], B = m_tri.v[1], C = m_tri.v[2];
     ImGui::SeparatorText("① 삼각형 전체 넓이 (외적)");
+    AboutHelp("삼각형 ABC 전체의 넓이를 외적으로 구하는 과정이에요.\n"
+              "외적 = 화살표 AB, AC 로 만든 평행사변형 넓이. 삼각형 넓이는 그 절반.\n"
+              "부호가 + 면 화면에서 시계 방향(앞면), - 면 반시계 방향(뒷면). 컬링은 이 부호를 보고 정해요.\n"
+              "이 넓이는 ② 에서 무게를 구할 때 나누는 수(분모)로 써요.");
     ImGui::Text("AB = B - A = (%.2f, %.2f)", B.x - A.x, B.y - A.y);
     ImGui::Text("AC = C - A = (%.2f, %.2f)", C.x - A.x, C.y - A.y);
     ImGui::Text("외적 = ABx*ACy - ABy*ACx");
@@ -816,6 +883,11 @@ void RasterScene::PanelCellTable(const CellCalc& cc)
 {
     const P2 P = SelectedCenter();
     ImGui::SeparatorText("② 고른 칸 계산표");
+    AboutHelp("고른 칸(노란 네모)의 중심 P 하나에 대해 래스터라이저가 하는 계산이에요.\n"
+              "P 와 꼭짓점 두 개로 작은 삼각형 3개를 만들어요 (화면의 빨강, 초록, 파랑 반투명 조각).\n"
+              "조각 넓이 / 전체 넓이 = 무게 wa, wb, wc. 셋 다 0 이상이면 P 가 삼각형 안 -> 칠함.\n"
+              "칠하면 색 = wa*빨강 + wb*초록 + wc*파랑. 이게 VS 가 넘긴 COLOR 가 섞여서 PS 에 들어오는 원리예요.\n"
+              "칸을 클릭하면 그 칸이 고정돼서, 마우스를 패널로 옮겨도 표가 그대로 있어요.");
     ImGui::Text("칸 (%d, %d) -> 픽셀 중심 P = (%.1f, %.1f)%s", m_selX, m_selY, P.x, P.y, m_pinned ? "  [고정됨]" : "");
     if (!ImGui::BeginTable("w", 3, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp)) return;
     ImGui::TableSetupColumn("조각");
@@ -881,6 +953,9 @@ void RasterScene::PanelCellColors(const CellCalc& cc)
 void RasterScene::PanelCompare()
 {
     ImGui::SeparatorText("③ CPU 계산 vs GPU 진짜 결과");
+    AboutHelp("2프레임 전에 GPU 가 그린 작은 그림을 CPU 로 가져와서(Readback 힙) 칸마다 CPU 계산과 비교한 결과예요.\n"
+              "다른 칸 0개 = GPU 래스터라이저도 ① ② 와 같은 계산을 한다는 뜻이에요.\n"
+              "같은 칸의 색 차이가 1~2 / 255 인 건 소수점 반올림 차이라 정상이에요.");
     if (!CompareReady()) { ImGui::TextDisabled("GPU 결과를 기다리는 중..."); return; }
     ImGui::Text("칠한 칸: CPU %d개 / GPU %d개", m_cmp.cpuCount, m_cmp.gpuCount);
     if (m_cmp.diffCount == 0) ImGui::TextColored(ImVec4(0.6f, 1, 0.6f, 1), "다른 칸 0개 -> GPU 도 똑같은 계산을 해요!");
