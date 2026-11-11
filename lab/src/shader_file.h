@@ -38,6 +38,8 @@ struct ShaderFile
     bool NeedsRebuild();               // 파일이 바뀌었거나 F5 를 눌렀으면 true (내용은 source 에 다시 읽어 둠)
     void RequestRebuild() { m_force = true; }
     bool SaveEdit();                   // 편집 창 내용을 파일에 저장 (-> 다음 프레임에 다시 컴파일)
+    bool RestoreOriginal(std::string& msg);   // 지금 파일을 backup/ 에 남기고 original/ 의 처음 코드로 되돌림
+    bool RestoreBackup(std::string& msg);     // 되돌리기를 취소: backup/ 의 코드로 다시 바꿈
     void ReloadEditFromSource();
 
     uint64_t m_lastWrite = 0;

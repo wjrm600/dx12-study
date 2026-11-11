@@ -129,6 +129,53 @@ bool ShaderFile::SaveEdit()
     return true;
 }
 
+// shaders/ 폴더 안의 하위 폴더 경로 (예: shaders/original/raster.hlsl)
+static std::wstring SubPath(const std::wstring& path, const wchar_t* sub, const std::string& name)
+{
+    const size_t cut = path.find_last_of(L"\\/");
+    std::wstring dir = path.substr(0, cut + 1);
+    const wchar_t sep[2] = { cut == std::wstring::npos ? L'\\' : path[cut], 0 };   // 경로에 쓰인 구분자(/ 또는 \)를 그대로
+    return dir + sub + sep + Widen(name);
+}
+static bool WriteAll(const std::wstring& p, const std::string& s)
+{
+    FILE* f = _wfopen(p.c_str(), L"wb");
+    if (!f) return false;
+    fwrite(s.data(), 1, s.size(), f);
+    fclose(f);
+    return true;
+}
+
+// 처음 코드로 되돌리기: shaders/original/ 에 저장소에 넣어 둔 처음 코드가 있다.
+// 지금 파일은 지우지 않고 shaders/backup/ 에 한 벌 남긴다 (실수로 눌러도 "되돌리기 취소"로 복구).
+bool ShaderFile::RestoreOriginal(std::string& msg)
+{
+    std::string orig, cur;
+    const std::wstring origPath = SubPath(path, L"original", name);
+    if (!ReadAll(origPath, orig)) { msg = "처음 코드 파일을 못 찾았어요: " + Narrow(origPath); return false; }
+    std::wstring dir = path.substr(0, path.find_last_of(L"\\/") + 1);
+    CreateDirectoryW((dir + L"backup").c_str(), nullptr);
+    const std::wstring backupPath = SubPath(path, L"backup", name);
+    if (ReadAll(path, cur) && !WriteAll(backupPath, cur)) { msg = "백업을 못 만들어서 되돌리지 않았어요: " + Narrow(backupPath); return false; }
+    if (!WriteAll(path, orig)) { msg = "저장 실패: " + pathUtf8; return false; }
+    editDirty = false;
+    m_force = true;   // 다음 프레임에 다시 읽고 컴파일
+    msg = "처음 코드로 되돌렸어요. 바로 전 코드는 " + Narrow(backupPath) + " 에 있어요.";
+    return true;
+}
+
+bool ShaderFile::RestoreBackup(std::string& msg)
+{
+    std::string b;
+    const std::wstring backupPath = SubPath(path, L"backup", name);
+    if (!ReadAll(backupPath, b)) { msg = "백업이 없어요 (아직 되돌린 적이 없음)."; return false; }
+    if (!WriteAll(path, b)) { msg = "저장 실패: " + pathUtf8; return false; }
+    editDirty = false;
+    m_force = true;
+    msg = "되돌리기 전 코드로 다시 바꿨어요.";
+    return true;
+}
+
 bool TryCompile(const ShaderFile& f, const char* entry, const char* target, ComPtr<ID3DBlob>& out, std::string& err)
 {
     ComPtr<ID3DBlob> code, msg;
@@ -170,6 +217,28 @@ static int CursorCallback(ImGuiInputTextCallbackData* d)
     return 0;
 }
 
+// "처음 코드로" 확인 창 + 결과 한 줄
+static std::string g_restoreMsg;
+static void EditorRestorePopup(ShaderFile& f)
+{
+    if (ImGui::BeginPopupModal("처음 코드로 되돌릴까요?", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+    {
+        ImGui::TextUnformatted("지금 코드를 저장소에 처음 들어 있던 코드로 바꿔요.");
+        ImGui::TextUnformatted("지금 코드는 지우지 않고 shaders/backup/ 폴더에 한 벌 남겨요.");
+        ImGui::TextDisabled("(나중에 \"되돌리기 취소\"로 다시 가져올 수 있어요)");
+        if (ImGui::Button("처음 코드로 되돌리기")) { f.RestoreOriginal(g_restoreMsg); ImGui::CloseCurrentPopup(); }
+        ImGui::SameLine();
+        if (ImGui::Button("취소")) ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
+    }
+    if (g_restoreMsg.empty()) return;
+    ImGui::TextColored(ImVec4(0.55f, 0.8f, 1.0f, 1.0f), "%s", g_restoreMsg.c_str());
+    ImGui::SameLine();
+    if (ImGui::SmallButton("되돌리기 취소")) f.RestoreBackup(g_restoreMsg);
+    ImGui::SameLine();
+    if (ImGui::SmallButton("알림 닫기")) g_restoreMsg.clear();
+}
+
 // 위쪽 버튼 줄: 저장, 다시 읽기, 메모장
 static void EditorToolbar(ShaderFile& f)
 {
@@ -181,9 +250,12 @@ static void EditorToolbar(ShaderFile& f)
     ImGui::SameLine();
     if (ImGui::Button("메모장으로 열기")) ShellExecuteW(nullptr, L"open", L"notepad.exe", f.path.c_str(), nullptr, SW_SHOWNORMAL);
     ImGui::SameLine();
+    if (ImGui::Button("처음 코드로")) ImGui::OpenPopup("처음 코드로 되돌릴까요?");
+    ImGui::SameLine();
     ImGui::Checkbox("독립 창", &f.detached);
     ImGui::SetItemTooltip("켜면 메인 창과 따로 노는 OS 창이에요 (다른 모니터로 옮길 수 있음).\n끄면 메인 창 안에 붙어요. (꺼 둬도 밖으로 끌어내면 다시 켜져요)");
     ImGui::TextDisabled("%s", f.pathUtf8.c_str());
+    EditorRestorePopup(f);
 }
 
 // 상태 줄: 성공이면 초록, 에러면 빨간 글씨로 컴파일러 메시지 그대로

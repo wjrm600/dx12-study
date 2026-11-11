@@ -24,3 +24,6 @@ imgui.ini
 Thumbs.db
 Desktop.ini
 .DS_Store
+
+# lab 셰이더 창의 "처음 코드로 되돌리기" 가 남기는 백업
+lab/shaders/backup/
