@@ -28,7 +28,8 @@ add_executable(DX12StudyLab WIN32
     ${IMGUI_DIR}/backends/imgui_impl_dx12.cpp
 )
 target_include_directories(DX12StudyLab PRIVATE src ${IMGUI_DIR} ${IMGUI_DIR}/backends)
-target_compile_definitions(DX12StudyLab PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
+# _CRT_SECURE_NO_WARNINGS: fopen / _wfopen 을 그대로 쓴다 (MSVC 의 "fopen_s 를 쓰라"는 C4996 경고 끄기)
+target_compile_definitions(DX12StudyLab PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN _CRT_SECURE_NO_WARNINGS)
 if(MSVC)
     target_compile_options(DX12StudyLab PRIVATE /utf-8 /W3 /MP)
     set_property(DIRECTORY ${CMAKE_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT DX12StudyLab)
