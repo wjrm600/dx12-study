@@ -60,8 +60,11 @@ static void SwitchScene(int index)
 static void DrawPanel(float panelW)
 {
     ImGuiIO& io = ImGui::GetIO();
-    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x - panelW, 0));
-    ImGui::SetNextWindowSize(ImVec2(panelW, io.DisplaySize.y));
+    // 멀티 뷰포트를 켜면 ImGui 좌표는 "모니터 기준"이라, 메인 창의 위치(vp->Pos)를 더해서 놓는다
+    const ImGuiViewport* vp = ImGui::GetMainViewport();
+    ImGui::SetNextWindowPos(ImVec2(vp->Pos.x + vp->Size.x - panelW, vp->Pos.y));
+    ImGui::SetNextWindowSize(ImVec2(panelW, vp->Size.y));
+    ImGui::SetNextWindowViewport(vp->ID);
     ImGui::Begin("패널", nullptr, ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse |
                                   ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoSavedSettings);
 
@@ -149,12 +152,16 @@ static void InitImGui(HWND hwnd)
     ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO();
     io.IniFilename = nullptr;
+    // 멀티 뷰포트: ImGui 창을 메인 창 밖으로 끌어내면 진짜 OS 창(작업 표시줄에도 나옴)이 된다.
+    // 셰이더 편집 창은 처음부터 독립 창으로 뜬다 (shader_file.cpp 의 DrawShaderEditor).
+    io.ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;
     ImGui::StyleColorsDark();
     ImGuiStyle& style = ImGui::GetStyle();
     style.ScaleAllSizes(g_dpi);
     style.FontScaleDpi = g_dpi;
     style.FontSizeBase = 17.0f;
     style.WindowRounding = 0.0f;
+    style.Colors[ImGuiCol_WindowBg].w = 1.0f;   // 독립 창은 뒤가 비치면 안 되니까 불투명하게
     LoadFonts(io);
 
     ImGui_ImplWin32_Init(hwnd);
@@ -188,7 +195,6 @@ static bool PumpMessages()
 static void RenderOneFrame()
 {
     static const float clear[4] = { 0.06f, 0.06f, 0.08f, 1.0f };
-    ImGuiIO& io = ImGui::GetIO();
 
     // 1) 이 프레임 자원 세트가 비었으면 장면이 되읽기 결과를 꺼낸다
     WaitCurrentFrameSlot();
@@ -198,8 +204,9 @@ static void RenderOneFrame()
     ImGui_ImplDX12_NewFrame();
     ImGui_ImplWin32_NewFrame();
     ImGui::NewFrame();
-    float panelW = std::min(g_panelWidth * g_dpi, io.DisplaySize.x * 0.6f);
-    Canvas canvas{ 0, 0, std::max(1.0f, io.DisplaySize.x - panelW), std::max(1.0f, io.DisplaySize.y) };
+    const ImGuiViewport* vp = ImGui::GetMainViewport();   // 메인 창 (x, y 는 모니터 기준 위치)
+    float panelW = std::min(g_panelWidth * g_dpi, vp->Size.x * 0.6f);
+    Canvas canvas{ vp->Pos.x, vp->Pos.y, std::max(1.0f, vp->Size.x - panelW), std::max(1.0f, vp->Size.y) };
     DrawPanel(panelW);
     g_scene->OnCanvas(canvas);
     ImGui::Render();
@@ -208,6 +215,10 @@ static void RenderOneFrame()
     ID3D12GraphicsCommandList* cl = BeginFrame(clear);
     g_scene->OnRender(cl, canvas);
     EndFrame();
+
+    // 5) 메인 창 밖으로 나간 ImGui 창(셰이더 편집 창 등)을 각자의 OS 창에 그린다
+    ImGui::UpdatePlatformWindows();
+    ImGui::RenderPlatformWindowsDefault();
 }
 
 // 개발용 자동 테스트: 장면의 AutoTest 를 한 걸음 돌리고, 끝났으면 결과를 남기고 true

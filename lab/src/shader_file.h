@@ -27,6 +27,7 @@ struct ShaderFile
     std::string  error;         // 마지막 컴파일 에러 ("" = 성공)
     int          buildCount = 0;   // 성공한 컴파일 횟수
     bool         editorOpen = true;
+    bool         detached = true;      // 셰이더 창을 메인 창 밖의 독립 OS 창으로 띄우기
 
     // 편집 창 버퍼
     std::vector<char> edit;
@@ -43,6 +44,7 @@ struct ShaderFile
     double   m_lastCheck = 0;
     bool     m_force = false;
     bool     m_changed = false;
+    bool     m_wasDetached = true;
 };
 
 // 실패해도 앱을 끄지 않는 컴파일. 실패하면 err 에 "raster.hlsl(12,5): error ..." 같은 메시지

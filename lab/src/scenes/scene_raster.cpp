@@ -212,7 +212,7 @@ private:
     void SetRootArguments(ID3D12GraphicsCommandList* cl);
     void RenderTriangleToLowRes(ID3D12GraphicsCommandList* cl);
     void CopyLowResToReadback(ID3D12GraphicsCommandList* cl);
-    void DrawLowResToScreen(ID3D12GraphicsCommandList* cl);
+    void DrawLowResToScreen(ID3D12GraphicsCommandList* cl, const Canvas& c);
 
     // OnPanel 단계
     void PanelSettings();
@@ -644,7 +644,7 @@ void RasterScene::DrawStatusText(ImDrawList* dl, const Canvas& c, const CellCalc
 // ---------------------------------------------------------------------
 // GPU 명령 기록 (Samples 의 PopulateCommandList 처럼 단계별로)
 // ---------------------------------------------------------------------
-void RasterScene::OnRender(ID3D12GraphicsCommandList* cl, const Canvas&)
+void RasterScene::OnRender(ID3D12GraphicsCommandList* cl, const Canvas& c)
 {
     if (m_sh.NeedsRebuild()) BuildPipelines();   // .hlsl 파일이 바뀌었으면 다시 컴파일 (핫 리로드)
     if (m_lowCols != m_cols || m_lowRows != m_rows) CreateLowRes(m_cols, m_rows);
@@ -653,7 +653,7 @@ void RasterScene::OnRender(ID3D12GraphicsCommandList* cl, const Canvas&)
     SetRootArguments(cl);          // 루트 시그니처 + 루트 상수(꼭짓점) + SRV 표
     RenderTriangleToLowRes(cl);    // 1패스 [래스터-④]
     CopyLowResToReadback(cl);      // 되읽기 [래스터-⑥]
-    DrawLowResToScreen(cl);        // 2패스 [래스터-⑤]
+    DrawLowResToScreen(cl, c);     // 2패스 [래스터-⑤]
 }
 
 TriConstants RasterScene::MakeConstants() const
@@ -711,12 +711,13 @@ void RasterScene::CopyLowResToReadback(ID3D12GraphicsCommandList* cl)
 }
 
 // ===== [래스터-⑤] 2패스: 작은 그림을 격자 영역에 크게 늘려 그리기 =====
-void RasterScene::DrawLowResToScreen(ID3D12GraphicsCommandList* cl)
+void RasterScene::DrawLowResToScreen(ID3D12GraphicsCommandList* cl, const Canvas& c)
 {
     D3D12_CPU_DESCRIPTOR_HANDLE rtv = CurrentBackBufferRtv();
     cl->OMSetRenderTargets(1, &rtv, FALSE, nullptr);
     if (m_view == VIEW_CPU) return;   // CPU 계산 보기는 ImGui 가 칸을 칠한다
-    D3D12_VIEWPORT vp{ m_gx0, m_gy0, GridW(), GridH(), 0, 1 };
+    // m_gx0, m_gy0 는 모니터 기준 좌표(ImGui). 백 버퍼 픽셀 좌표로 바꾸려면 메인 창 위치(c.x, c.y)를 뺀다
+    D3D12_VIEWPORT vp{ m_gx0 - c.x, m_gy0 - c.y, GridW(), GridH(), 0, 1 };
     D3D12_RECT sc{ 0, 0, (LONG)g_dx.width, (LONG)g_dx.height };
     cl->RSSetViewports(1, &vp);
     cl->RSSetScissorRects(1, &sc);

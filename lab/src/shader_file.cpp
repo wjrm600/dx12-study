@@ -180,6 +180,9 @@ static void EditorToolbar(ShaderFile& f)
     if (ImGui::Button("파일에서 다시 읽기 (F5)")) { f.editDirty = false; f.RequestRebuild(); }
     ImGui::SameLine();
     if (ImGui::Button("메모장으로 열기")) ShellExecuteW(nullptr, L"open", L"notepad.exe", f.path.c_str(), nullptr, SW_SHOWNORMAL);
+    ImGui::SameLine();
+    ImGui::Checkbox("독립 창", &f.detached);
+    ImGui::SetItemTooltip("켜면 메인 창과 따로 노는 OS 창이에요 (다른 모니터로 옮길 수 있음).\n끄면 메인 창 안에 붙어요.");
     ImGui::TextDisabled("%s", f.pathUtf8.c_str());
 }
 
@@ -245,6 +248,19 @@ static void EditorLinesTab(const ShaderFile& f)
     ImGui::EndTabItem();
 }
 
+// 처음 뜰 위치: 모니터에 메인 창 오른쪽 빈자리가 있으면 거기(나란히 보기), 없으면 메인 창 위 오른쪽 아래
+static ImVec2 FirstEditorPos(const Canvas& c, ImVec2 size)
+{
+    const ImGuiViewport* vp = ImGui::GetMainViewport();
+    const float right = vp->Pos.x + vp->Size.x + 8.0f;
+    for (const ImGuiPlatformMonitor& m : ImGui::GetPlatformIO().Monitors)
+    {
+        const bool onThisMonitor = vp->Pos.x >= m.WorkPos.x && vp->Pos.x < m.WorkPos.x + m.WorkSize.x;
+        if (onThisMonitor && right + size.x <= m.WorkPos.x + m.WorkSize.x) return ImVec2(right, vp->Pos.y);
+    }
+    return ImVec2(c.x + c.w * 0.40f, c.y + c.h * 0.30f);
+}
+
 void DrawShaderEditor(ShaderFile& f, const Canvas& c)
 {
     // 단축키: F2 창 열기/닫기, F5 파일에서 다시 읽고 컴파일
@@ -252,8 +268,17 @@ void DrawShaderEditor(ShaderFile& f, const Canvas& c)
     if (ImGui::IsKeyPressed(ImGuiKey_F5, false)) f.RequestRebuild();
     if (!f.editorOpen) return;
 
-    ImGui::SetNextWindowPos(ImVec2(c.x + c.w * 0.40f, c.y + c.h * 0.30f), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(c.w * 0.58f, c.h * 0.68f), ImGuiCond_FirstUseEver);
+    const ImVec2 size(c.w * 0.58f, c.h * 0.68f);
+    ImGui::SetNextWindowPos(FirstEditorPos(c, size), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(size, ImGuiCond_FirstUseEver);
+    // 독립 창: 메인 창 위에 겹쳐 있어도 합쳐지지 않고 자기만의 OS 창(작업 표시줄 아이콘 포함)으로 뜬다.
+    // 그래서 다른 모니터로 옮기거나, 메인 창과 나란히 놓고 볼 수 있다.
+    ImGuiWindowClass wc;
+    if (f.detached) wc.ViewportFlagsOverrideSet = ImGuiViewportFlags_NoAutoMerge;
+    else wc.ViewportFlagsOverrideClear = ImGuiViewportFlags_NoAutoMerge;
+    ImGui::SetNextWindowClass(&wc);
+    if (!f.detached && f.m_wasDetached) ImGui::SetNextWindowPos(ImVec2(c.x + c.w * 0.40f, c.y + c.h * 0.30f));   // 붙이면 메인 창 안으로 데려온다
+    f.m_wasDetached = f.detached;
     std::string title = "셰이더: " + f.name + (f.editDirty ? " *" : "") + "###shader_editor_" + f.name;
     if (!ImGui::Begin(title.c_str(), &f.editorOpen)) { ImGui::End(); return; }
 
