@@ -34,9 +34,12 @@
 | 번호 | 장면 | 배운 곳 |
 |---|---|---|
 | 1 | 래스터라이저: 무게중심(wa, wb, wc), 외적 넓이, 컬링, 탑-레프트 규칙 | HelloTriangle 실습 가이드의 셰이더 놀이터 ④⑤, 래스터라이저 절 |
-| (예정) | 큐브와 깊이 버퍼 | HelloTriangle 실습 5 |
-| (예정) | 텍스처 SRV + 샘플러 | HelloTriangle 실습 4 |
-| (예정) | 루트 시그니처 / 루트 상수 / CBV | HelloTriangle 실습 3 |
+| 2 | 픽셀 셰이더 놀이터: Shadertoy 구조(화면 덮는 삼각형 + PS)를 DX12 로, iTime·iResolution·iMouse = 루트 상수 | 학습 로드맵 1단계 |
+| (예정) | 상수 버퍼와 루트 시그니처 | 로드맵 2단계, HelloTriangle 실습 3 |
+| (예정) | 텍스처 SRV + 샘플러 | 로드맵 3단계, HelloTriangle 실습 4 |
+| (예정) | 큐브와 깊이 버퍼 | 로드맵 4단계, HelloTriangle 실습 5 |
+
+순서와 단계별 실험 체크리스트는 [DX12 학습 로드맵](https://claude.ai/artifact/19cW9MwFY7VyhbSDZ6Q8eS) 에 있어요.
 
 ## 장면 1: 래스터라이저
 
@@ -94,6 +97,24 @@
 - **탑-레프트 규칙**: 픽셀 중심이 모서리에 딱 걸치면, 그 모서리가 위쪽 수평 모서리나 왼쪽 모서리일 때만 칠하기. 두 삼각형이 같은 픽셀을 두 번 칠하거나 틈이 생기는 걸 막음.
 - **1/256 반올림**: GPU 는 꼭짓점 좌표를 픽셀의 1/256 단위로 맞춘 뒤 계산해요. 이 앱도 똑같이 맞춰서 CPU 와 GPU 결과가 칸 하나까지 같아요.
 
+## 장면 2: 픽셀 셰이더 놀이터
+
+Shadertoy 의 정체는 "화면을 덮는 삼각형 하나 + 픽셀 셰이더 하나"예요. 이 장면은 그걸 DX12 로 그대로 만든 거예요.
+고칠 곳은 [`shaders/playground.hlsl`](shaders/playground.hlsl) 의 `mainImage` 하나뿐이에요 (F2 셰이더 창, Ctrl+S 로 바로 반영).
+
+- 파일 맨 위 주석에 실험 ①~④ 와 **GLSL → HLSL 바꾸는 표**가 있어요. `vec2`, `mix`, `fract`, `iTime` 같은 Shadertoy 이름은 `#define` 으로 그대로 쓸 수 있어요.
+- 오른쪽 패널의 표에서 지금 셰이더에 들어가는 iTime, iResolution, iMouse 실제 값을 볼 수 있어요. 그림 영역을 누른 채 끌면 iMouse 가 바뀌어요.
+- 시간 멈춤 / 0초로 / 빠르기 버튼이 있어요.
+
+![장면 2 픽셀 셰이더 놀이터](docs/scene2-playground.png)
+
+| 표시 (Ctrl+F) | 내용 |
+|---|---|
+| `[놀이터-①]` | 루트 시그니처: 루트 상수 8개(b0) 하나뿐 |
+| `[놀이터-②]` | PSO: 정점 버퍼 없음, 컬링 없음 |
+| `[놀이터-③]` | 매 프레임 시간, 그림 크기, 마우스 채우기 |
+| `[놀이터-④]` | 뷰포트 = 그림 영역, `DrawInstanced(3)` 한 번 |
+
 ## 파일 구성
 
 ```
@@ -107,8 +128,10 @@ lab/
     scene.h            장면이 채울 함수 목록
     scenes/
       scene_raster.cpp 장면 1
+      scene_playground.cpp 장면 2
   shaders/
     raster.hlsl        장면 1 셰이더 (실행 중에 읽음, 고치면 바로 반영)
+    playground.hlsl    장면 2 셰이더 (mainImage 만 고치면 됨)
   third_party/imgui    Dear ImGui 1.92.6 (docking 판: 멀티 뷰포트 = ImGui 창을 OS 창으로 꺼내기)
 ```
 

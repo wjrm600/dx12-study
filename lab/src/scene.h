@@ -35,3 +35,4 @@ public:
 
 // 장면 만들기 함수들 (scenes/*.cpp 에 있음)
 Scene* CreateRasterScene();
+Scene* CreatePlaygroundScene();

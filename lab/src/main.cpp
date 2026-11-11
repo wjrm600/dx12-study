@@ -5,7 +5,8 @@
 //  오른쪽 패널 맨 위의 "장면" 메뉴에서 고른다.
 //
 //    장면 1: 래스터라이저 - 삼각형이 어떤 픽셀을 칠하는지 (무게중심 wa·wb·wc, 외적 넓이, 컬링)
-//    (다음 예정) 큐브와 깊이 버퍼, 텍스처, 루트 시그니처 ...
+//    장면 2: 픽셀 셰이더 놀이터 - Shadertoy 구조(화면 덮는 삼각형 + PS)를 DX12 로
+//    (다음 예정) 학습 로드맵 2단계부터: 상수 버퍼, 텍스처, 큐브와 깊이 버퍼 ...
 //
 //  파일 구성:
 //    core.h / core.cpp   : 모든 장면이 같이 쓰는 DX12 뼈대 (장치, 스왑체인, 펜스 ...)
@@ -23,6 +24,7 @@
 #include "imgui_impl_dx12.h"
 #include <algorithm>
 #include <cstdio>
+#include <cstdlib>
 #include <memory>
 #include <vector>
 
@@ -34,6 +36,7 @@ extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg
 using SceneFactory = Scene* (*)();
 static const SceneFactory kScenes[] = {
     CreateRasterScene,      // 장면 1: 래스터라이저
+    CreatePlaygroundScene,  // 장면 2: 픽셀 셰이더 놀이터 (Shadertoy 옮기기)
 };
 static const int kSceneCount = (int)(sizeof(kScenes) / sizeof(kScenes[0]));
 
@@ -84,7 +87,7 @@ static void DrawPanel(float panelW)
             if (ImGui::Selectable(tmp->Name(), i == g_sceneIndex)) SwitchScene(i);
         }
         ImGui::Separator();
-        ImGui::TextDisabled("다음 예정: 큐브와 깊이 버퍼, 텍스처, 루트 시그니처");
+        ImGui::TextDisabled("다음 예정 (학습 로드맵): 상수 버퍼, 텍스처, 큐브와 깊이 버퍼");
         ImGui::EndCombo();
     }
     ImGui::Checkbox("VSync (모니터 주사율에 맞추기)", &g_dx.vsync);
@@ -282,7 +285,9 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int)
     ShowWindow(hwnd, SW_SHOWDEFAULT);
     UpdateWindow(hwnd);
     InitImGui(hwnd);
-    SwitchScene(0);
+    char env[8] = {};   // 개발용: LAB_SCENE=1 처럼 처음 장면을 고른다 (0부터)
+    int first = GetEnvironmentVariableA("LAB_SCENE", env, sizeof env) > 0 ? atoi(env) : 0;
+    SwitchScene(std::max(0, std::min(kSceneCount - 1, first)));
 
     int failures = RunMainLoop(hwnd);
     Shutdown();
