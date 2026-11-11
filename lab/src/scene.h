@@ -26,6 +26,7 @@ public:
     virtual void OnPanel() {}
     virtual void OnCanvas(const Canvas& /*c*/) {}
     virtual void OnRender(ID3D12GraphicsCommandList* /*cl*/, const Canvas& /*c*/) {}
+    virtual void OnMinimized(const Canvas& /*c*/) {}  // 메인 창이 최소화된 동안 (독립 창만 그릴 때)
 
     // 개발용 자동 테스트 (환경변수 LAB_AUTOTEST=1). 매 프레임 불린다.
     // true 를 돌려주면 테스트 끝. failures 에 실패 개수를 더한다.

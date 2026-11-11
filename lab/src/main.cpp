@@ -192,7 +192,9 @@ static bool PumpMessages()
 }
 
 // 한 프레임: 되읽기 결과 꺼내기 -> UI -> 장면 GPU 명령 -> ImGui + Present
-static void RenderOneFrame()
+// minimized = 메인 창이 최소화됨. 그래도 독립 창(셰이더 창)은 계속 움직여야 하니
+// UI 와 독립 창은 그리고, 보이지 않는 메인 창의 그리기(장면 + Present)만 건너뛴다.
+static void RenderOneFrame(bool minimized)
 {
     static const float clear[4] = { 0.06f, 0.06f, 0.08f, 1.0f };
 
@@ -204,17 +206,25 @@ static void RenderOneFrame()
     ImGui_ImplDX12_NewFrame();
     ImGui_ImplWin32_NewFrame();
     ImGui::NewFrame();
-    const ImGuiViewport* vp = ImGui::GetMainViewport();   // 메인 창 (x, y 는 모니터 기준 위치)
-    float panelW = std::min(g_panelWidth * g_dpi, vp->Size.x * 0.6f);
-    Canvas canvas{ vp->Pos.x, vp->Pos.y, std::max(1.0f, vp->Size.x - panelW), std::max(1.0f, vp->Size.y) };
-    DrawPanel(panelW);
-    g_scene->OnCanvas(canvas);
+    static Canvas canvas{ 0, 0, 1, 1 };   // 최소화 중에는 마지막 크기를 그대로 쓴다
+    if (!minimized)
+    {
+        const ImGuiViewport* vp = ImGui::GetMainViewport();   // 메인 창 (x, y 는 모니터 기준 위치)
+        const float panelW = std::min(g_panelWidth * g_dpi, vp->Size.x * 0.6f);
+        canvas = Canvas{ vp->Pos.x, vp->Pos.y, std::max(1.0f, vp->Size.x - panelW), std::max(1.0f, vp->Size.y) };
+        DrawPanel(panelW);
+        g_scene->OnCanvas(canvas);
+    }
+    else g_scene->OnMinimized(canvas);   // 셰이더 창만 (고치고 저장하면 컴파일도 됨)
     ImGui::Render();
 
-    // 3) GPU 명령 기록 -> 4) ImGui 덮어 그리기 + Present
-    ID3D12GraphicsCommandList* cl = BeginFrame(clear);
-    g_scene->OnRender(cl, canvas);
-    EndFrame();
+    // 3) GPU 명령 기록 -> 4) ImGui 덮어 그리기 + Present  (메인 창이 보일 때만)
+    if (!minimized)
+    {
+        ID3D12GraphicsCommandList* cl = BeginFrame(clear);
+        g_scene->OnRender(cl, canvas);
+        EndFrame();
+    }
 
     // 5) 메인 창 밖으로 나간 ImGui 창(셰이더 편집 창 등)을 각자의 OS 창에 그린다
     ImGui::UpdatePlatformWindows();
@@ -241,9 +251,10 @@ static int RunMainLoop(HWND hwnd)
 
     while (PumpMessages())
     {
-        if (IsIconic(hwnd)) { Sleep(16); continue; }
-        if (g_resizePending) { g_resizePending = false; ResizeSwapChain(g_newW, g_newH); }
-        RenderOneFrame();
+        const bool minimized = IsIconic(hwnd) != FALSE;
+        if (minimized) Sleep(15);   // 메인 창 VSync 가 없으니 독립 창만 돌 때 CPU 를 덜 쓰게 (약 60번/초)
+        else if (g_resizePending) { g_resizePending = false; ResizeSwapChain(g_newW, g_newH); }
+        RenderOneFrame(minimized);
         if (autotest && AutoTestStep(testFrame, failures)) break;
     }
     return failures;

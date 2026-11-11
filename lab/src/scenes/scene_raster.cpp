@@ -129,6 +129,7 @@ public:
     void OnPanel() override;
     void OnCanvas(const Canvas& c) override;
     void OnRender(ID3D12GraphicsCommandList* cl, const Canvas& c) override;
+    void OnMinimized(const Canvas& c) override;
     bool AutoTest(int frame, int& failures) override;
 
 private:
@@ -639,6 +640,13 @@ void RasterScene::DrawStatusText(ImDrawList* dl, const Canvas& c, const CellCalc
     else if (whole.culled) snprintf(status, sizeof status, "%s 이라서 컬링됨 -> 칸을 계산하기도 전에 통째로 버림", whole.front ? "앞면(시계 방향)" : "뒷면(반시계 방향)");
     else snprintf(status, sizeof status, "%s · 꼭짓점을 끌어 보세요 · 칸을 누르면 그 칸 계산표가 고정돼요", whole.front ? "앞면(시계 방향)" : "뒷면(반시계 방향)");
     dl->AddText(ImVec2(m_gx0, c.y + fs * 1.7f), IM_COL32(220, 220, 220, 255), status);
+}
+
+// 메인 창이 최소화돼도 셰이더 창은 살아 있게: 창을 그리고, 저장하면 컴파일해서 에러를 바로 보여 준다
+void RasterScene::OnMinimized(const Canvas& c)
+{
+    if (m_sh.NeedsRebuild()) BuildPipelines();
+    DrawShaderEditor(m_sh, c);
 }
 
 // ---------------------------------------------------------------------
