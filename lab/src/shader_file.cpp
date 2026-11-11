@@ -253,7 +253,7 @@ static void EditorToolbar(ShaderFile& f)
     if (ImGui::Button("처음 코드로")) ImGui::OpenPopup("처음 코드로 되돌릴까요?");
     ImGui::SameLine();
     ImGui::Checkbox("독립 창", &f.detached);
-    ImGui::SetItemTooltip("켜면 메인 창과 따로 노는 OS 창이에요 (다른 모니터로 옮길 수 있음).\n끄면 메인 창 안에 붙어요. (꺼 둬도 밖으로 끌어내면 다시 켜져요)");
+    ImGui::SetItemTooltip("켜면 메인 창과 따로 노는 OS 창이에요 (다른 모니터로 옮길 수 있음, 최소화·최대화 버튼, 제목 더블 클릭 = 최대화).\n끄면 메인 창 안에 붙어요. (꺼 둬도 밖으로 끌어내면 다시 켜져요)");
     ImGui::TextDisabled("%s", f.pathUtf8.c_str());
     EditorRestorePopup(f);
 }
@@ -345,10 +345,13 @@ void DrawShaderEditor(ShaderFile& f, const Canvas& c)
     ImGui::SetNextWindowSize(size, ImGuiCond_FirstUseEver);
     // 독립 창: 메인 창 위에 겹쳐 있어도 합쳐지지 않고 자기만의 OS 창(작업 표시줄 아이콘 포함)으로 뜬다.
     // 그래서 다른 모니터로 옮기거나, 메인 창과 나란히 놓고 볼 수 있다.
+    // 독립 창일 때는 진짜 윈도우 제목 표시줄(최소화·최대화·닫기, 더블 클릭 = 최대화)을 쓰고, ImGui 제목 줄은 숨긴다.
+    // 메인 창 안에 붙어 있을 때는 OS 창이 아니니 ImGui 제목 줄(▼ 접기, X 닫기)을 그대로 쓴다.
     ImGuiWindowClass wc;
-    if (f.detached) wc.ViewportFlagsOverrideSet = ImGuiViewportFlags_NoAutoMerge;
+    if (f.detached) { wc.ViewportFlagsOverrideSet = ImGuiViewportFlags_NoAutoMerge; wc.ViewportFlagsOverrideClear = ImGuiViewportFlags_NoDecoration; }
     else wc.ViewportFlagsOverrideClear = ImGuiViewportFlags_NoAutoMerge;
     ImGui::SetNextWindowClass(&wc);
+    const ImGuiWindowFlags flags = f.detached ? ImGuiWindowFlags_NoTitleBar : 0;
     if (!f.detached && f.m_wasDetached)
     {
         ImGui::SetNextWindowPos(ImVec2(c.x + c.w * 0.40f, c.y + c.h * 0.30f));   // 붙이면 메인 창 안으로 데려온다
@@ -356,7 +359,7 @@ void DrawShaderEditor(ShaderFile& f, const Canvas& c)
     }
     f.m_wasDetached = f.detached;
     std::string title = "셰이더: " + f.name + (f.editDirty ? " *" : "") + "###shader_editor_" + f.name;
-    if (!ImGui::Begin(title.c_str(), &f.editorOpen)) { ImGui::End(); return; }
+    if (!ImGui::Begin(title.c_str(), &f.editorOpen, flags)) { ImGui::End(); return; }
 
     // 토글이 꺼져 있어도 메인 창 밖으로 끌어내면 따로 OS 창이 된다. 그러면 토글도 켜서 화면 표시와 맞춘다
     if (f.m_attachGrace > 0) f.m_attachGrace--;
