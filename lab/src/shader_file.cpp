@@ -182,7 +182,7 @@ static void EditorToolbar(ShaderFile& f)
     if (ImGui::Button("메모장으로 열기")) ShellExecuteW(nullptr, L"open", L"notepad.exe", f.path.c_str(), nullptr, SW_SHOWNORMAL);
     ImGui::SameLine();
     ImGui::Checkbox("독립 창", &f.detached);
-    ImGui::SetItemTooltip("켜면 메인 창과 따로 노는 OS 창이에요 (다른 모니터로 옮길 수 있음).\n끄면 메인 창 안에 붙어요.");
+    ImGui::SetItemTooltip("켜면 메인 창과 따로 노는 OS 창이에요 (다른 모니터로 옮길 수 있음).\n끄면 메인 창 안에 붙어요. (꺼 둬도 밖으로 끌어내면 다시 켜져요)");
     ImGui::TextDisabled("%s", f.pathUtf8.c_str());
 }
 
@@ -277,10 +277,18 @@ void DrawShaderEditor(ShaderFile& f, const Canvas& c)
     if (f.detached) wc.ViewportFlagsOverrideSet = ImGuiViewportFlags_NoAutoMerge;
     else wc.ViewportFlagsOverrideClear = ImGuiViewportFlags_NoAutoMerge;
     ImGui::SetNextWindowClass(&wc);
-    if (!f.detached && f.m_wasDetached) ImGui::SetNextWindowPos(ImVec2(c.x + c.w * 0.40f, c.y + c.h * 0.30f));   // 붙이면 메인 창 안으로 데려온다
+    if (!f.detached && f.m_wasDetached)
+    {
+        ImGui::SetNextWindowPos(ImVec2(c.x + c.w * 0.40f, c.y + c.h * 0.30f));   // 붙이면 메인 창 안으로 데려온다
+        f.m_attachGrace = 3;   // 메인 창에 합쳐지는 데 한두 프레임 걸리니, 그동안은 아래 "꺼냈나?" 검사를 쉰다
+    }
     f.m_wasDetached = f.detached;
     std::string title = "셰이더: " + f.name + (f.editDirty ? " *" : "") + "###shader_editor_" + f.name;
     if (!ImGui::Begin(title.c_str(), &f.editorOpen)) { ImGui::End(); return; }
+
+    // 토글이 꺼져 있어도 메인 창 밖으로 끌어내면 따로 OS 창이 된다. 그러면 토글도 켜서 화면 표시와 맞춘다
+    if (f.m_attachGrace > 0) f.m_attachGrace--;
+    else if (!f.detached && ImGui::GetWindowViewport() != ImGui::GetMainViewport()) f.detached = f.m_wasDetached = true;
 
     EditorToolbar(f);
     EditorStatus(f);

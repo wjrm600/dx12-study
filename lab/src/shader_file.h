@@ -45,6 +45,7 @@ struct ShaderFile
     bool     m_force = false;
     bool     m_changed = false;
     bool     m_wasDetached = true;
+    int      m_attachGrace = 0;
 };
 
 // 실패해도 앱을 끄지 않는 컴파일. 실패하면 err 에 "raster.hlsl(12,5): error ..." 같은 메시지
