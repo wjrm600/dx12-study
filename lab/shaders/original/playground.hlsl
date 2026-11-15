@@ -34,8 +34,8 @@
 //          fragColor = vec4(col, 1.0);
 //      }
 //
-//  도전 과제 답안 (로드맵 1단계 "바다 위 해 지는 풍경", Ming 이 직접 짠 코드 2026-11-13)
-//    하늘 그라데이션 + 칼같은 수평선 + 10초마다 지는 해 + 점점 어두워지는 하늘.
+//  도전 과제 답안 (로드맵 1단계 "바다 위 해 지는 풍경", Ming 이 직접 짠 코드 2026-11-15)
+//    하늘 그라데이션 + 칼같은 수평선 + 10초마다 지는 해 + 점점 어두워지는 하늘 + 바다에 비친 해의 세로 띠.
 //    써 보려면 아래 mainImage 를 통째로 이걸로 바꾸고 맨 앞의 "//" 를 지우세요.
 //      void mainImage(out vec4 fragColor, in vec2 fragCoord)
 //      {
@@ -45,32 +45,40 @@
 //          float2 uv = fragCoord / iResolution.xy;
 //
 //          // 배경 그라데이션
-//          float3 g = float3(0.0, 0.0, 0.0);
-//          float f = fract(iTime * 0.1);   // 0 -> 1
+//          float3 resultColor = float3(0.0, 0.0, 0.0);
+//          float2 centered = (fragCoord - 0.5 * iResolution.xy) / iResolution.y;
+//          float sunsetProgress = fract(iTime * 0.1);   // 0 -> 1
+//          float sunRadius = 0.1;  // 반지름
+//          float sunY = lerp(0.5, -0.2 - sunRadius, sunsetProgress);   // 화면 맨 위 -> 수평선 아래로 완전히
+//          float2 sunCenter = float2(0.0, sunY); // 화면 맨 위(0.5) -> 수평선 아래(-0.2 - r)
 //          if(step(0.3, uv.y))
 //          {
-//              float t = (uv.y - 0.3) / 0.7;
-//              g = lerp(orange, blue, t);
+//              float skyBlend = (uv.y - 0.3) / 0.7;
+//              resultColor = lerp(orange, blue, skyBlend);
 //
 //              // 움직이는 해(잘린 부분부터는 바다 뒤로 가야하기 때문에 여기까지 그린다.)
-//              float2 p = (fragCoord - 0.5 * iResolution.xy) / iResolution.y;
-//
-//              float r = 0.1;  // 반지름
-//              float y = lerp(0.5, -0.2 - r, f);   // 화면 맨 위 -> 수평선 아래로 완전히
-//              float2 c = float2(0.0, y); // 화면 맨 위(0.5) -> 수평선 아래(-0.2 - r)
-//
-//              float d = length(p - c);
-//              float inside = step(d, r);
-//              if(inside)
-//                  g = red;
+//              float distToSun = length(centered - sunCenter);
+//              float inSun = step(distToSun, sunRadius);
+//              if(inSun)
+//                  resultColor = red;
 //          }
 //          else
-//              g = blue;
+//          {
+//              if(abs(centered.x - sunCenter.x) < sunRadius)
+//              {
+//                  float sunBlend = saturate(sunCenter.y - centered.y);
+//                  resultColor = lerp(red, blue, sunBlend);
+//              }
+//              else
+//              {
+//                  resultColor = blue;
+//              }
+//          }
 //
 //          // 점점 어두워지게 하기
-//          float time = lerp(1.0, 0.3, f); //너무 어두워지지 않게
-//          g = g * time;
-//          fragColor = float4(g, 1.0);
+//          float brightness = lerp(1.0, 0.3, sunsetProgress); //너무 어두워지지 않게
+//          resultColor = resultColor * brightness;
+//          fragColor = float4(resultColor, 1.0);
 //      }
 // =====================================================================
 
