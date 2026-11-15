@@ -6,7 +6,8 @@
 //
 //    장면 1: 래스터라이저 - 삼각형이 어떤 픽셀을 칠하는지 (무게중심 wa·wb·wc, 외적 넓이, 컬링)
 //    장면 2: 픽셀 셰이더 놀이터 - Shadertoy 구조(화면 덮는 삼각형 + PS)를 DX12 로
-//    (다음 예정) 학습 로드맵 2단계부터: 상수 버퍼, 텍스처, 큐브와 깊이 버퍼 ...
+//    장면 3: 돌아가는 삼각형 - 같은 상수를 루트 상수 / 루트 CBV / 디스크립터 테이블 세 가지 길로
+//    (다음 예정) 학습 로드맵 3단계부터: 텍스처, 큐브와 깊이 버퍼 ...
 //
 //  파일 구성:
 //    core.h / core.cpp   : 모든 장면이 같이 쓰는 DX12 뼈대 (장치, 스왑체인, 펜스 ...)
@@ -37,6 +38,7 @@ using SceneFactory = Scene* (*)();
 static const SceneFactory kScenes[] = {
     CreateRasterScene,      // 장면 1: 래스터라이저
     CreatePlaygroundScene,  // 장면 2: 픽셀 셰이더 놀이터 (Shadertoy 옮기기)
+    CreateSpinScene,        // 장면 3: 돌아가는 삼각형 (상수를 보내는 세 가지 길)
 };
 static const int kSceneCount = (int)(sizeof(kScenes) / sizeof(kScenes[0]));
 
@@ -87,7 +89,7 @@ static void DrawPanel(float panelW)
             if (ImGui::Selectable(tmp->Name(), i == g_sceneIndex)) SwitchScene(i);
         }
         ImGui::Separator();
-        ImGui::TextDisabled("다음 예정 (학습 로드맵): 상수 버퍼, 텍스처, 큐브와 깊이 버퍼");
+        ImGui::TextDisabled("다음 예정 (학습 로드맵): 텍스처, 큐브와 깊이 버퍼");
         ImGui::EndCombo();
     }
     ImGui::Checkbox("VSync (모니터 주사율에 맞추기)", &g_dx.vsync);
