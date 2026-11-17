@@ -517,12 +517,15 @@ void SpinScene::PanelValues()
 {
     ImGui::SeparatorText("지금 보낸 값");
     AboutHelp("이번 프레임에 삼각형마다 보낸 숫자예요. 각도는 cos, sin 을 다시 각도로 바꿔서 보여 줘요.\n"
-              "\"어디로\"는 숫자가 들어간 곳이에요. A 는 주문서 안, B 와 C 는 Upload 버퍼의 몇 번째 칸인지.");
+              "\"어디로\"는 숫자가 들어간 곳이에요. A 는 주문서 안, B 와 C 는 Upload 버퍼의 몇 번째 칸인지.\n"
+              "B, C 는 칸 번호가 두 개예요 (예: 칸 0 / 3). 프레임마다 세트 0 과 세트 1 을 번갈아 쓰거든요. 앞이 세트 0, 뒤가 세트 1 이에요. 괄호 안 +숫자는 버퍼 맨 앞에서 몇 바이트 떨어진 곳인지예요.\n"
+              "(지금 쓰는 칸 하나만 보여 주면 글자가 매 프레임 바뀌어서 두 값이 겹쳐 보여요.)");
     if (!ImGui::BeginTable("vals", 4, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp)) return;
-    ImGui::TableSetupColumn("삼각형");
-    ImGui::TableSetupColumn("각도");
-    ImGui::TableSetupColumn("(cos, sin)");
-    ImGui::TableSetupColumn("어디로");
+    // 열 너비를 비율로 고정해요. 글자 길이에 맞춰 너비가 매 프레임 바뀌면 표가 흔들려요.
+    ImGui::TableSetupColumn("삼각형", ImGuiTableColumnFlags_WidthStretch, 0.8f);
+    ImGui::TableSetupColumn("각도", ImGuiTableColumnFlags_WidthStretch, 0.7f);
+    ImGui::TableSetupColumn("(cos, sin)", ImGuiTableColumnFlags_WidthStretch, 1.2f);
+    ImGui::TableSetupColumn("어디로 (세트 0 / 1)", ImGuiTableColumnFlags_WidthStretch, 2.4f);
     ImGui::TableHeadersRow();
     for (UINT i = 0; i < kDraws; i++)
     {
@@ -537,9 +540,12 @@ void SpinScene::PanelValues()
         ImGui::Text("%.0f도", deg);
         ImGui::TableNextColumn(); ImGui::Text("(%.2f, %.2f)", k.cosSin[0], k.cosSin[1]);
         ImGui::TableNextColumn();
+        // 세트 0 의 칸과 세트 1 의 칸을 둘 다 보여 줘요 (SlotFor 와 같은 계산)
+        const UINT s0 = m_oneSlot ? 0 : i;
+        const UINT s1 = kDraws + s0;
         if (m_method == kRootConst) ImGui::TextUnformatted("주문서 안");
-        else if (m_method == kRootCbv) ImGui::Text("칸 %u (+%u바이트)", m_lastSlot[i], m_lastSlot[i] * kSlotSize);
-        else ImGui::Text("주소록 #%u -> 칸 %u", m_cbvIndex[m_lastSlot[i] < kSlots ? m_lastSlot[i] : 0], m_lastSlot[i]);
+        else if (m_method == kRootCbv) ImGui::Text("칸 %u / %u (+%u / +%u)", s0, s1, s0 * kSlotSize, s1 * kSlotSize);
+        else ImGui::Text("주소록 #%u / #%u -> 칸 %u / %u", m_cbvIndex[s0], m_cbvIndex[s1], s0, s1);
     }
     ImGui::EndTable();
 }
