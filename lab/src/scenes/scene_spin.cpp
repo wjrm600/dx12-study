@@ -264,7 +264,7 @@ bool SpinScene::BuildPso(int m, ID3DBlob* vs, ID3DBlob* ps)
              "방법 %s: 컴파일은 됐지만 PSO 를 못 만들었어요.\n"
              "%s",
              kMethodName[m],
-             m == kRootConst ? "흔한 이유: cbuffer 에 값을 더 넣어서 루트 상수 12개(48바이트)를 넘김. 가방에 12칸만 잡아 뒀어요 (실험 ③).\n"
+             m == kRootConst ? "흔한 이유: cbuffer 에 값을 더 넣고 셰이더에서 그 값을 읽어서, 루트 상수 12개(48바이트)를 넘김. 가방에 12칸만 잡아 뒀어요 (실험 ③).\n"
                              : "흔한 이유: b1, t0 처럼 루트 시그니처에 없는 레지스터를 씀.\n");
     m_psoError[m] = msg;
     return false;
@@ -481,7 +481,8 @@ void SpinScene::PanelShader()
     }
     ImGui::SameLine();
     Help("셰이더 파일은 하나인데 PSO(셰이더 + 설정 묶음)는 방법마다 하나씩, 3개를 만들어요. 루트 시그니처가 PSO 안에 들어가거든요.\n"
-         "셰이더 파일 맨 위 실험 ③(cbuffer 에 값 추가)을 해 보면 A 만 실패해요.");
+         "셰이더 파일 맨 위 실험 ③(cbuffer 에 값을 추가하고 셰이더에서 그 값을 읽기)을 해 보면 A 만 실패해요.\n"
+         "추가만 하고 안 읽으면 컴파일러가 그 값을 없는 셈 쳐서 아무 일도 없어요.");
     ImGui::TextDisabled("파일 맨 위 주석에 실험 ①~③ 이 있어요");
 }
 
