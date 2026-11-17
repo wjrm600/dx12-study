@@ -23,6 +23,7 @@
 #include "../shader_file.h"
 #include "../ui_help.h"
 #include "imgui.h"
+#include <d3d11shader.h>   // D3DReflect: 컴파일된 셰이더가 b0 에서 몇 바이트 읽는지 알아보기
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -85,6 +86,10 @@ private:
     ComPtr<ID3D12RootSignature> m_rootSig[kMethodCount];
     ComPtr<ID3D12PipelineState> m_pso[kMethodCount];
     std::string                 m_psoError[kMethodCount];
+    // 셰이더가 b0 에서 실제로 읽는 바이트 (리플렉션으로 알아냄, 0 = 알 수 없음)
+    // PSO 를 만들 때 D3D12 는 "루트 상수 개수 < 셰이더가 읽는 크기"를 막아 주지 않아요. 그래서 직접 검사해요.
+    UINT                        m_b0Used = 0;
+    UINT                        m_b0Declared = 0;
 
     // 방법 B, C 가 쓰는 Upload 버퍼 (CPU 가 쓰고 GPU 가 읽는 RAM)
     ComPtr<ID3D12Resource>      m_upload;
@@ -109,6 +114,7 @@ private:
     void CreateCbvDescriptors();
     bool BuildPipelines();
     bool BuildPso(int method, ID3DBlob* vs, ID3DBlob* ps);
+    void PanelB0Check();
     void MakeConstants(SpinConstants out[kDraws]) const;
     UINT SlotFor(UINT draw) const;
     void WriteSlot(UINT slot, const SpinConstants& k);
@@ -222,6 +228,37 @@ void SpinScene::CreateCbvDescriptors()
     }
 }
 
+// 컴파일된 셰이더에게 "b0 에서 몇 바이트를 읽니?" 물어보기 (셰이더 리플렉션)
+// cbuffer 에 적혀만 있고 아무도 안 읽는 값은 D3D_SVF_USED 가 꺼져 있어요 -> 세지 않아요.
+// declared 에는 cbuffer 에 적힌 전체 크기(16바이트 줄 단위로 올림)를 넣어요.
+static UINT B0BytesRead(ID3DBlob* blob, UINT* declared)
+{
+    ComPtr<ID3D11ShaderReflection> refl;
+    if (FAILED(D3DReflect(blob->GetBufferPointer(), blob->GetBufferSize(), IID_ID3D11ShaderReflection, (void**)refl.GetAddressOf())))
+        return 0;
+    D3D11_SHADER_DESC sd{};
+    if (FAILED(refl->GetDesc(&sd))) return 0;
+    for (UINT r = 0; r < sd.BoundResources; r++)
+    {
+        D3D11_SHADER_INPUT_BIND_DESC bd{};
+        if (FAILED(refl->GetResourceBindingDesc(r, &bd))) continue;
+        if (bd.Type != D3D_SIT_CBUFFER || bd.BindPoint != 0) continue;
+        ID3D11ShaderReflectionConstantBuffer* cb = refl->GetConstantBufferByName(bd.Name);
+        D3D11_SHADER_BUFFER_DESC cd{};
+        if (!cb || FAILED(cb->GetDesc(&cd))) return 0;
+        *declared = std::max(*declared, (UINT)cd.Size);
+        UINT used = 0;
+        for (UINT v = 0; v < cd.Variables; v++)
+        {
+            D3D11_SHADER_VARIABLE_DESC vd{};
+            if (FAILED(cb->GetVariableByIndex(v)->GetDesc(&vd))) continue;
+            if (vd.uFlags & D3D_SVF_USED) used = std::max(used, vd.StartOffset + vd.Size);
+        }
+        return used;
+    }
+    return 0;
+}
+
 // 셰이더는 한 번 컴파일해서 PSO 3개(루트 시그니처마다 하나)에 같이 쓴다
 bool SpinScene::BuildPipelines()
 {
@@ -230,6 +267,8 @@ bool SpinScene::BuildPipelines()
     bool ok = TryCompile(m_sh, "SpinVS", "vs_5_0", vs, err);
     ok &= TryCompile(m_sh, "SpinPS", "ps_5_0", ps, err);
     if (!ok) { m_sh.error = err; return false; }   // 문법 에러: 지금 쓰던 PSO 를 그대로 둔다
+    m_b0Declared = 0;
+    m_b0Used = std::max(B0BytesRead(vs.Get(), &m_b0Declared), B0BytesRead(ps.Get(), &m_b0Declared));
 
     if (m_pso[0] || m_pso[1] || m_pso[2]) WaitIdle();   // GPU 가 옛 PSO 를 다 쓴 뒤에 바꾼다
     std::string all;
@@ -264,8 +303,7 @@ bool SpinScene::BuildPso(int m, ID3DBlob* vs, ID3DBlob* ps)
              "방법 %s: 컴파일은 됐지만 PSO 를 못 만들었어요.\n"
              "%s",
              kMethodName[m],
-             m == kRootConst ? "흔한 이유: cbuffer 에 값을 더 넣고 셰이더에서 그 값을 읽어서, 루트 상수 12개(48바이트)를 넘김. 가방에 12칸만 잡아 뒀어요 (실험 ③).\n"
-                             : "흔한 이유: b1, t0 처럼 루트 시그니처에 없는 레지스터를 씀.\n");
+             "흔한 이유: b1, t0 처럼 루트 시그니처(가방)에 없는 레지스터를 씀.\n");
     m_psoError[m] = msg;
     return false;
 }
@@ -292,6 +330,9 @@ void SpinScene::DrawCanvasText(const Canvas& c)
     if (!m_pso[m_method])
         dl->AddText(ImVec2(c.x + fs * 0.6f, c.y + fs * 1.8f), IM_COL32(255, 120, 120, 255),
                     "이 방법의 PSO 가 없어서 아무것도 안 그려요. 셰이더 창의 빨간 글씨를 보세요.");
+    if (m_method == kRootConst && m_b0Used > sizeof(SpinConstants))
+        dl->AddText(ImVec2(c.x + fs * 0.6f, c.y + fs * 3.2f), IM_COL32(255, 120, 120, 255),
+                    "주의: 셰이더가 가방(48바이트)보다 많이 읽어요. 넘친 자리는 정해지지 않은 값이에요.");
     if (m_oneSlot && m_method != kRootConst)
         dl->AddText(ImVec2(c.x + fs * 0.6f, c.y + fs * 1.8f), IM_COL32(255, 210, 120, 255),
                     "삼각형을 3번 그렸는데 1개만 보여요. 3개가 같은 칸의 마지막 값(파랑)을 읽었어요.");
@@ -481,9 +522,39 @@ void SpinScene::PanelShader()
     }
     ImGui::SameLine();
     Help("셰이더 파일은 하나인데 PSO(셰이더 + 설정 묶음)는 방법마다 하나씩, 3개를 만들어요. 루트 시그니처가 PSO 안에 들어가거든요.\n"
-         "셰이더 파일 맨 위 실험 ③(cbuffer 에 값을 추가하고 셰이더에서 그 값을 읽기)을 해 보면 A 만 실패해요.\n"
-         "추가만 하고 안 읽으면 컴파일러가 그 값을 없는 셈 쳐서 아무 일도 없어요.");
+         "\"됨\"은 PSO 를 만드는 데 성공했다는 뜻이에요. b1, t0 처럼 가방에 없는 자리를 쓰면 실패해요.\n"
+         "하지만 크기가 모자라는 건 막아 주지 않아요. 아래 \"b0 크기 검사\"를 보세요.");
+    PanelB0Check();
     ImGui::TextDisabled("파일 맨 위 주석에 실험 ①~③ 이 있어요");
+}
+
+// 셰이더가 b0 에서 읽는 크기 vs 방법마다 b0 에 준비된 크기
+void SpinScene::PanelB0Check()
+{
+    const UINT bagBytes = sizeof(SpinConstants);   // A: 루트 상수 12개 = 48바이트
+    if (m_b0Used == 0)
+    {
+        ImGui::TextDisabled("b0 크기 검사: 셰이더 정보를 못 읽었어요");
+        return;
+    }
+    ImGui::Text("b0 크기 검사: 셰이더가 읽는 양 %u바이트", m_b0Used);
+    AboutHelp("셰이더 리플렉션(D3DReflect)으로 컴파일된 셰이더에게 물어본 값이에요.\n"
+              "\"읽는 바이트\"는 셰이더가 실제로 쓰는 값까지만 세요. cbuffer 에 적혀만 있고 아무도 안 읽는 값은 컴파일러가 없는 셈 쳐요.\n"
+              "A 는 가방에 숫자 12개(48바이트)만 넣어요. 셰이더가 그보다 많이 읽으면 넘친 자리는 아무도 정하지 않은 값이에요 (0 일 수도, 쓰레기일 수도).\n"
+              "D3D12 는 PSO 를 만들 때 이걸 막아 주지 않아서, 이렇게 직접 검사하는 거예요.\n"
+              "B, C 는 256바이트 칸을 가리키니까 64바이트까지 읽어도 칸 안이에요 (C++ 이 안 쓴 자리는 0).");
+    ImGui::TextDisabled("(cbuffer 에 적힌 크기는 %u바이트. 안 읽는 값은 안 세요)", m_b0Declared);
+    if (m_b0Used > bagBytes)
+    {
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1, 0.45f, 0.45f, 1));
+        ImGui::TextWrapped("A: 가방은 %u바이트뿐인데 %u바이트를 읽어요. 넘친 %u바이트는 정해지지 않은 값이에요! (PSO 는 그래도 만들어져요)",
+                           bagBytes, m_b0Used, m_b0Used - bagBytes);
+        ImGui::PopStyleColor();
+    }
+    else
+        ImGui::TextColored(ImVec4(0.55f, 1, 0.55f, 1), "A: 가방 %u바이트 안에 들어가요", bagBytes);
+    ImGui::TextColored(m_b0Used <= kSlotSize ? ImVec4(0.55f, 1, 0.55f, 1) : ImVec4(1, 0.45f, 0.45f, 1),
+                       "B, C: 칸 %u바이트 %s", kSlotSize, m_b0Used <= kSlotSize ? "안에 들어가요" : "를 넘어요!");
 }
 
 // 가방(루트 시그니처) 사용량 비교 표
