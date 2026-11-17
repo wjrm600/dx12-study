@@ -37,3 +37,4 @@ public:
 Scene* CreateRasterScene();
 Scene* CreatePlaygroundScene();
 Scene* CreateSpinScene();
+Scene* CreateTextureScene();

@@ -38,7 +38,7 @@
 | 1 | 래스터라이저: 무게중심(wa, wb, wc), 외적 넓이, 컬링, 탑-레프트 규칙 | HelloTriangle 실습 가이드의 셰이더 놀이터 ④⑤, 래스터라이저 절 |
 | 2 | 픽셀 셰이더 놀이터: Shadertoy 구조(화면 덮는 삼각형 + PS)를 DX12 로, iTime·iResolution·iMouse = 루트 상수 | 학습 로드맵 1단계 |
 | 3 | 돌아가는 삼각형: 같은 상수를 루트 상수 / 루트 CBV / 디스크립터 테이블 세 가지 길로, Upload 버퍼 256바이트 칸, "한 칸만 쓰기" 일부러 틀리기 | 로드맵 2단계, HelloTriangle 실습 3 |
-| (예정) | 텍스처 SRV + 샘플러 | 로드맵 3단계, HelloTriangle 실습 4 |
+| 4 | 텍스처 붙이기: 그림을 Upload -> VRAM 으로 올리기(CopyTextureRegion, 배리어), SRV 카드, 샘플러(필터, 주소 모드, 밉맵), 밉 직접 만들기 | 로드맵 3단계, HelloTriangle 실습 4 |
 | (예정) | 큐브와 깊이 버퍼 | 로드맵 4단계, HelloTriangle 실습 5 |
 
 순서와 단계별 실험 체크리스트는 [DX12 학습 로드맵](https://claude.ai/artifact/19cW9MwFY7VyhbSDZ6Q8eS) 에 있어요.
@@ -145,6 +145,43 @@ Shadertoy 의 정체는 "화면을 덮는 삼각형 하나 + 픽셀 셰이더 �
 | `[회전-⑤]` | 매 프레임 각도 -> cos, sin |
 | `[회전-⑥]` | `DrawWithRootConstants` / `DrawWithRootCbv` / `DrawWithTable` 나란히 비교 |
 
+## 장면 4: 텍스처 붙이기 (그림 한 장 VRAM 에 올리기)
+
+256x256 체크무늬 그림을 CPU 에서 만들어 VRAM 에 올리고, 셰이더가 샘플러로 읽어요. 샘플러를 바꾸면 **그림은 그대로인데 읽는 방법만** 바뀌어요.
+네 모서리 칸 색으로 방향을 알 수 있어요: 왼쪽 위 빨강, 오른쪽 위 초록, 왼쪽 아래 노랑, 오른쪽 아래 파랑.
+
+그림이 VRAM 까지 가는 길 (패널에 진행 상태 표가 있어요):
+
+| # | 어디서 무엇을 | 코드 |
+|---|---|---|
+| 1 | CPU 배열에 그림 + 밉 8장 (2x2 평균, DX12 에는 `GenerateMips` 가 없음) | `MakeImages` |
+| 2 | Default 힙(VRAM) 에 빈 텍스처, 처음 상태 `COPY_DEST` | `CreateCommittedResource` |
+| 3 | Upload 버퍼(RAM) 에 줄마다 복사. 줄 간격은 너비가 아니라 `RowPitch` (256바이트 배수) | `GetCopyableFootprints`, `WriteUpload` |
+| 4 | 첫 프레임 명령 목록에 밉마다 복사 9번 + 배리어 `COPY_DEST -> PIXEL_SHADER_RESOURCE` | `CopyTextureRegion`, `RecordCopies` |
+| 5 | SRV 카드를 주소록(SRV 힙)에 -> 셰이더의 `t0` | `CreateShaderResourceView` |
+| 6 | 같은 프레임 세트가 돌아오면(GPU 복사 끝) Upload 버퍼 지우기 | `OnFrameReused` |
+
+- 보기 2가지: **평면**(가운데 네모, 확대 0.05~16배, 마우스 휠) / **바닥**(멀리까지 이어진 바닥, 움직이기).
+- 샘플러: 필터 POINT / LINEAR / ANISOTROPIC, 주소 WRAP / CLAMP / MIRROR, UV 배수 1~4, 밉맵 켬/끔(`MaxLOD = 0`). 카드 18장을 샘플러 힙에 미리 만들어 두고 번호만 바꿔요.
+- **밉 레벨 색칠**: 밉 1..8 에 색을 입힌 두 번째 텍스처. 화면 색으로 GPU 가 고른 밉을 볼 수 있어요.
+- 루트 시그니처(가방): 칸 0 = SRV 테이블(`t0`), 칸 1 = 샘플러 테이블(`s0`), 칸 2 = 루트 상수 8개(`b0`). 텍스처는 장면 3의 방법 C(디스크립터 테이블)로만 넘길 수 있어요.
+- 밉 레벨 표: 밉마다 크기, 바이트, 줄 간격(32x32 이하는 빈칸이 생김), 시작 위치. 밉 9장 = +33%.
+- 셰이더 [`shaders/tex.hlsl`](shaders/tex.hlsl) 맨 위 실험: ① uv.y 뒤집기 ② `SampleLevel` 로 밉 직접 고르기 ③ `.bgr` 채널 바꾸기.
+
+![장면 4 바닥 보기 + 밉 레벨 색칠](docs/scene4-floor.png)
+
+![장면 4 평면 보기](docs/scene4-texture.png)
+
+| 표시 (Ctrl+F) | 내용 |
+|---|---|
+| `[텍스처-①]` | CPU 에서 그림 + 밉맵 만들기 |
+| `[텍스처-②]` | VRAM 에 빈 텍스처 (Default 힙, COPY_DEST) |
+| `[텍스처-③]` | Upload 버퍼에 쓰기 (`GetCopyableFootprints`, RowPitch) |
+| `[텍스처-④]` | 복사 명령 + 배리어, 끝나면 Upload 버퍼 지우기 |
+| `[텍스처-⑤]` | SRV 카드 |
+| `[텍스처-⑥]` | 샘플러 힙 18장 |
+| `[텍스처-⑦]` | 루트 시그니처 + 그리기 (`SetDescriptorHeaps` 2권) |
+
 ## 파일 구성
 
 ```
@@ -160,10 +197,12 @@ lab/
       scene_raster.cpp 장면 1
       scene_playground.cpp 장면 2
       scene_spin.cpp   장면 3
+      scene_texture.cpp 장면 4
   shaders/
     raster.hlsl        장면 1 셰이더 (실행 중에 읽음, 고치면 바로 반영)
     playground.hlsl    장면 2 셰이더 (mainImage 만 고치면 됨)
     spin.hlsl          장면 3 셰이더 (세 방법이 같이 씀)
+    tex.hlsl           장면 4 셰이더 (Texture2D t0 + SamplerState s0)
     original/          "처음 코드로" 버튼이 쓰는 처음 코드 (셰이더를 바꿔 커밋할 때 여기도 같이 고치기)
     backup/            "처음 코드로" 를 누르기 직전 코드 (git 에 안 올라감)
   third_party/imgui    Dear ImGui 1.92.6 (docking 판: 멀티 뷰포트 = ImGui 창을 OS 창으로 꺼내기)
@@ -188,3 +227,4 @@ lab/
 모서리 실험 모양)을 차례로 그리고, CPU 계산과 GPU 결과가 칸마다 같은지 확인한 뒤 `lab_autotest.log` 에 결과를 남기고 끝나요.
 마지막 케이스는 탑-레프트 규칙을 끈 CPU 계산이 GPU 와 **달라야** 통과해요.
 `LAB_SCENE=2` 를 같이 주면 장면 3을 시험해요: 방법 A, B, C 와 "한 칸만 쓰기" 켬/끔 6가지에서 삼각형 중심 픽셀을 되읽어 기대한 색인지 확인해요.
+`LAB_SCENE=3` 이면 장면 4: 평면 모서리 색(빨강, 초록), UV 2배에서 WRAP / MIRROR / CLAMP 가 기대한 칸 색을 읽는지, 바닥 먼 곳 색이 밉 켬/끔에서 다른지, 끝나고 Upload 버퍼가 지워졌는지 확인해요.
