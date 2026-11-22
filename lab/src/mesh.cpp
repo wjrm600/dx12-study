@@ -8,9 +8,9 @@
 ComPtr<ID3D12Resource> CreateDefaultBuffer(const void* data, uint64_t size, D3D12_RESOURCE_STATES finalState, const wchar_t* name)
 {
     // 버퍼는 만들 때 늘 COMMON 상태예요 (다른 상태를 적어도 COMMON 으로 만들어져요).
-    ComPtr<ID3D12Resource> dst    = CreateBuffer(D3D12_HEAP_TYPE_DEFAULT, size, D3D12_RESOURCE_STATE_COMMON);
+    auto dst    = CreateBuffer(D3D12_HEAP_TYPE_DEFAULT, size, D3D12_RESOURCE_STATE_COMMON);
     // Upload 힙은 늘 GENERIC_READ 로 만들어요 (CPU 가 쓰고 GPU 가 읽는 곳).
-    ComPtr<ID3D12Resource> upload = CreateBuffer(D3D12_HEAP_TYPE_UPLOAD, size, D3D12_RESOURCE_STATE_GENERIC_READ);
+    auto upload = CreateBuffer(D3D12_HEAP_TYPE_UPLOAD, size, D3D12_RESOURCE_STATE_GENERIC_READ);
     dst->SetName(name);                    // PIX, 디버그 레이어 메시지에 보이는 이름
     upload->SetName(L"upload staging");
 
@@ -29,10 +29,10 @@ ComPtr<ID3D12Resource> CreateDefaultBuffer(const void* data, uint64_t size, D3D1
     HR(g_dx.device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&alloc)));
     HR(g_dx.device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, alloc.Get(), nullptr, IID_PPV_ARGS(&cl)));
 
-    D3D12_RESOURCE_BARRIER toCopy = Transition(dst.Get(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COPY_DEST);
+    auto toCopy = Transition(dst.Get(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COPY_DEST);
     cl->ResourceBarrier(1, &toCopy);
     cl->CopyBufferRegion(dst.Get(), 0, upload.Get(), 0, size);
-    D3D12_RESOURCE_BARRIER toRead = Transition(dst.Get(), D3D12_RESOURCE_STATE_COPY_DEST, finalState);
+    auto toRead = Transition(dst.Get(), D3D12_RESOURCE_STATE_COPY_DEST, finalState);
     cl->ResourceBarrier(1, &toRead);
     HR(cl->Close());
 

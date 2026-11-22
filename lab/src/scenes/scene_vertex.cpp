@@ -53,9 +53,11 @@ static_assert(sizeof(Vertex) == 28, "float 7개 = 28바이트");
 //   InputSlotClass, InstanceDataStepRate : 정점마다 다음 값으로 (인스턴싱이면 PER_INSTANCE)
 static const D3D12_INPUT_ELEMENT_DESC kInputLayout[] =
 {
-    { "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT,    0, offsetof(Vertex, position), D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },   // 0 바이트부터
-    { "COLOR",    0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, offsetof(Vertex, color),    D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },   // 12 바이트부터
+    { "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT,    0, 0,  D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },   // 0 바이트부터
+    { "COLOR",    0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 12, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },   // 12 바이트부터
 };
+// 시작 바이트를 손으로 적었으니, 구조체가 바뀌면 컴파일 때 알려 주게 한다
+static_assert(offsetof(Vertex, position) == 0 && offsetof(Vertex, color) == 12, "kInputLayout 의 시작 바이트를 고치세요");
 
 // 도형 데이터 (실제 게임에서는 모델 파일에서 읽어 온다). 위치는 -1..1 (가운데 0, 위 +1)
 static const Vertex kTri[3] =
