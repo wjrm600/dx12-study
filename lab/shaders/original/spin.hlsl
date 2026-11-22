@@ -6,13 +6,16 @@
 //  셰이더는 "b0 에 SpinConstants 가 있다"만 알고, 그 값이 어떤 길로 왔는지는 몰라요.
 //  길은 C++ 의 루트 시그니처(준비물 가방)가 정해요.
 //
-//  함수 이름 2개(SpinVS, SpinPS)는 C++ 이 찾으니까 바꾸지 마세요.
+//  삼각형 모양(꼭짓점 3개)은 정점 버퍼에서 와요 (게임 방식, 장면 5 와 같은 mesh.h 도우미).
+//  비교용으로 정점 버퍼 없이 번호(SV_VertexID)로 만드는 SpinVSNoBuffer 도 남겨 뒀어요 (패널의 체크 상자).
+//
+//  함수 이름 3개(SpinVS, SpinVSNoBuffer, SpinPS)는 C++ 이 찾으니까 바꾸지 마세요.
 //  망가뜨려도 괜찮아요. 셰이더 창의 "처음 코드로" 버튼으로 돌아가요.
 //
 //  해 볼 실험
 //    ① SpinPS 에서  return float4(gColor.rgb * i.shade, 1.0);  ->  return float4(gColor.rgb, 1.0);
 //       꼭짓점마다 다른 밝기(shade)를 빼면 어느 쪽이 "머리"인지 안 보여요.
-//    ② SpinVS 에서 회전을 끄기:  float2 r = Rotate(p, gCosSin);  ->  float2 r = p;
+//    ② SpinVS 에서 회전을 끄기:  float2 r = Rotate(v.position, gCosSin);  ->  float2 r = v.position;
 //       C++ 은 여전히 각도를 보내지만, 셰이더가 안 쓰면 아무 일도 없어요.
 //    ③ 가방보다 많이 읽게 하기 (패널의 "b0 크기 검사"를 보면서)
 //       (1) cbuffer 맨 끝에  float4 gExtra;  한 줄 추가하고 저장
@@ -49,10 +52,28 @@ float2 Rotate(float2 p, float2 cs)
                   cs.y * p.x + cs.x * p.y);
 }
 
-// 정점 버퍼 없이 번호(0, 1, 2)로 꼭짓점을 만들어요 (장면 2와 같은 방법)
-VSOut SpinVS(uint id : SV_VertexID)
+// [회전-⑦] 정점 하나 = 12바이트 (C++ 의 SpinVertex, 입력 레이아웃과 짝). 게임 방식
+struct SpinVertex
 {
-    // 정삼각형. 무게중심이 (0, 0) 이라 돌려도 제자리에서 돌아요. 0번 꼭짓점이 "머리"(밝게)
+    float2 position : POSITION;   // 꼭짓점 위치 (정삼각형, 무게중심이 (0, 0) 이라 돌려도 제자리)
+    float  shade    : SHADE;      // 꼭짓점 밝기 (0번 "머리" 1.0, 나머지 0.55)
+};
+
+// 게임 방식: IA 가 정점 버퍼에서 12바이트씩 잘라 v 에 넣어 줘요. 삼각형 3개가 같은 정점 버퍼를 같이 쓰고,
+// 다른 건 b0 의 값(회전, 위치, 크기, 색)뿐이에요.
+VSOut SpinVS(SpinVertex v)
+{
+    float2 r = Rotate(v.position, gCosSin);
+    VSOut o;
+    o.pos   = float4(r * gScale + gOffset, 0.0, 1.0);
+    o.shade = v.shade;
+    return o;
+}
+
+// 비교용: 정점 버퍼 없이 번호(0, 1, 2)로 꼭짓점을 만들어요 (장면 2와 같은 방법)
+VSOut SpinVSNoBuffer(uint id : SV_VertexID)
+{
+    // 위 정점 버퍼와 같은 값을 셰이더 안에 직접 적어 둬요
     float2 p = float2(0.0, 1.0);  float shade = 1.0;
     if (id == 1) { p = float2( 0.866, -0.5); shade = 0.55; }
     if (id == 2) { p = float2(-0.866, -0.5); shade = 0.55; }

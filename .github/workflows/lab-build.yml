@@ -1,0 +1,44 @@
+# lab 앱이 Windows(MSVC)에서 빌드되는지, 셰이더가 fxc 로 컴파일되는지 확인 (실행은 안 함: GPU 가 없음)
+name: lab build
+
+on:
+  push:
+    paths: [ "lab/**", ".github/workflows/lab-build.yml" ]
+  pull_request:
+    paths: [ "lab/**", ".github/workflows/lab-build.yml" ]
+  workflow_dispatch:
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure (CMake, Visual Studio)
+        run: cmake -S lab -B build -A x64
+
+      - name: Build (Release)
+        run: cmake --build build --config Release -- /m
+
+      - name: Compile shaders with fxc (같은 컴파일러를 앱이 실행 중에 씀)
+        shell: pwsh
+        run: |
+          $fxc = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin" -Recurse -Filter fxc.exe |
+                 Where-Object { $_.FullName -like '*\x64\*' } | Sort-Object FullName | Select-Object -Last 1
+          if (-not $fxc) { throw "fxc.exe not found" }
+          Write-Host "fxc: $($fxc.FullName)"
+          $jobs = @(
+            @('raster.hlsl', 'TriVS', 'vs_5_0'), @('raster.hlsl', 'TriPS', 'ps_5_0'), @('raster.hlsl', 'BlitVS', 'vs_5_0'), @('raster.hlsl', 'BlitPS', 'ps_5_0'),
+            @('playground.hlsl', 'FullVS', 'vs_5_0'), @('playground.hlsl', 'MainPS', 'ps_5_0'),
+            @('spin.hlsl', 'SpinVS', 'vs_5_0'), @('spin.hlsl', 'SpinVSNoBuffer', 'vs_5_0'), @('spin.hlsl', 'SpinPS', 'ps_5_0'),
+            @('tex.hlsl', 'TexVS', 'vs_5_0'), @('tex.hlsl', 'TexQuadVS', 'vs_5_0'), @('tex.hlsl', 'TexPS', 'ps_5_0'),
+            @('vb.hlsl', 'VSMain', 'vs_5_0'), @('vb.hlsl', 'VSNoBufferTri', 'vs_5_0'), @('vb.hlsl', 'VSNoBufferQuad', 'vs_5_0'), @('vb.hlsl', 'PSMain', 'ps_5_0')
+          )
+          $failed = 0
+          foreach ($dir in @('lab/shaders', 'lab/shaders/original')) {
+            foreach ($j in $jobs) {
+              & $fxc.FullName /nologo /T $j[2] /E $j[1] /Fo NUL "$dir/$($j[0])"
+              if ($LASTEXITCODE -ne 0) { Write-Host "FAIL $dir/$($j[0]) $($j[1])"; $failed++ }
+            }
+          }
+          if ($failed) { throw "$failed shader(s) failed" }

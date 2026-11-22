@@ -18,8 +18,11 @@
 //    [회전-④] 디스크립터: 방법 C 의 "주소록" 칸에 Upload 버퍼 칸 주소 적기
 //    [회전-⑤] 매 프레임 값 계산 (각도 -> cos, sin)
 //    [회전-⑥] 그리기: 방법마다 값을 넘기는 함수가 다르다
+//    [회전-⑦] 정점 버퍼 (게임 방식): 삼각형 모양 12바이트 x 3 을 Default 힙(VRAM)에 한 번 올려 두고 3번 같이 쓴다
+//             비교용으로 "정점 버퍼 없이 (SV_VertexID)" 체크 상자를 켜면 장면 2처럼 셰이더 안의 점을 쓴다
 // =====================================================================
 #include "../scene.h"
+#include "../mesh.h"
 #include "../shader_file.h"
 #include "../ui_help.h"
 #include "imgui.h"
@@ -27,6 +30,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstddef>
 #include <cstring>
 
 namespace {
@@ -41,6 +45,20 @@ struct SpinConstants
     float color[4];
 };
 static_assert(sizeof(SpinConstants) == 48, "float 12개 = 48바이트");
+
+// ===== [회전-⑦] 삼각형 모양 = 정점 버퍼. 정점 하나 12바이트, HLSL 의 SpinVertex 와 짝 =====
+struct SpinVertex
+{
+    float position[2];   // POSITION : 정삼각형 꼭짓점 (무게중심 0, 0)
+    float shade;         // SHADE    : 밝기 (0번 "머리" 1.0, 나머지 0.55)
+};
+static_assert(sizeof(SpinVertex) == 12, "float 3개 = 12바이트");
+static const SpinVertex kTriangle[3] = { { { 0.0f, 1.0f }, 1.0f }, { { 0.866f, -0.5f }, 0.55f }, { { -0.866f, -0.5f }, 0.55f } };
+static const D3D12_INPUT_ELEMENT_DESC kSpinLayout[] =
+{
+    { "POSITION", 0, DXGI_FORMAT_R32G32_FLOAT, 0, offsetof(SpinVertex, position), D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
+    { "SHADE",    0, DXGI_FORMAT_R32_FLOAT,    0, offsetof(SpinVertex, shade),    D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
+};
 
 static const UINT kDraws    = 3;     // 삼각형 수
 static const UINT kSlotSize = 256;   // 상수 버퍼 한 칸 = 256바이트 (D3D12 규칙: CBV 는 256바이트 단위)
@@ -84,7 +102,12 @@ public:
 private:
     ShaderFile                  m_sh;   // lab/shaders/spin.hlsl
     ComPtr<ID3D12RootSignature> m_rootSig[kMethodCount];
-    ComPtr<ID3D12PipelineState> m_pso[kMethodCount];
+    ComPtr<ID3D12PipelineState> m_pso[kMethodCount];        // 게임 방식: 정점 버퍼 (SpinVS)
+    ComPtr<ID3D12PipelineState> m_psoNoBuf[kMethodCount];   // 비교용: 정점 버퍼 없이 (SpinVSNoBuffer)
+    Mesh                        m_mesh;                     // [회전-⑦] 삼각형 모양 (Default 힙)
+    bool                        m_noBuffer = false;         // 비교용 체크 상자
+    ID3D12PipelineState* Pso(int m) const { return m_noBuffer ? m_psoNoBuf[m].Get() : m_pso[m].Get(); }
+    void DrawTriangle(ID3D12GraphicsCommandList* cl) const;
     std::string                 m_psoError[kMethodCount];
     // 셰이더가 b0 에서 실제로 읽는 바이트 (리플렉션으로 알아냄, 0 = 알 수 없음)
     // PSO 를 만들 때 D3D12 는 "루트 상수 개수 < 셰이더가 읽는 크기"를 막아 주지 않아요. 그래서 직접 검사해요.
@@ -113,7 +136,7 @@ private:
     void CreateUploadBuffer();
     void CreateCbvDescriptors();
     bool BuildPipelines();
-    bool BuildPso(int method, ID3DBlob* vs, ID3DBlob* ps);
+    bool BuildPso(int method, ID3DBlob* vs, ID3DBlob* vsNoBuf, ID3DBlob* ps);
     void PanelB0Check();
     void MakeConstants(SpinConstants out[kDraws]) const;
     UINT SlotFor(UINT draw) const;
@@ -151,6 +174,8 @@ void SpinScene::Init()
     CreateRootSigs();        // [회전-②]
     CreateUploadBuffer();    // [회전-③]
     CreateCbvDescriptors();  // [회전-④]
+    // [회전-⑦] 삼각형 모양을 VRAM 에 한 번 올린다 (인덱스 없이 점 3개. 안은 mesh.cpp 의 [정점-②~⑥])
+    m_mesh = CreateMesh(kTriangle, sizeof(SpinVertex), 3, nullptr, 0, MeshHeap::Default, L"spin triangle");
     m_sh.Open("spin.hlsl");
     m_sh.editorOpen = false;   // 이 장면의 주인공은 패널(세 가지 길 비교). 셰이더 창은 F2 로
     BuildPipelines();
@@ -198,6 +223,7 @@ void SpinScene::CreateRootSigs()
     {
         D3D12_ROOT_SIGNATURE_DESC rs{};
         rs.NumParameters = 1; rs.pParameters = &params[m];
+        rs.Flags = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;   // 정점 버퍼(입력 레이아웃)를 쓴다
         m_rootSig[m] = CreateRootSignature(rs);
     }
 }
@@ -262,30 +288,32 @@ static UINT B0BytesRead(ID3DBlob* blob, UINT* declared)
 // 셰이더는 한 번 컴파일해서 PSO 3개(루트 시그니처마다 하나)에 같이 쓴다
 bool SpinScene::BuildPipelines()
 {
-    ComPtr<ID3DBlob> vs, ps;
+    ComPtr<ID3DBlob> vs, vsNoBuf, ps;
     std::string err;
     bool ok = TryCompile(m_sh, "SpinVS", "vs_5_0", vs, err);
+    ok &= TryCompile(m_sh, "SpinVSNoBuffer", "vs_5_0", vsNoBuf, err);
     ok &= TryCompile(m_sh, "SpinPS", "ps_5_0", ps, err);
     if (!ok) { m_sh.error = err; return false; }   // 문법 에러: 지금 쓰던 PSO 를 그대로 둔다
     m_b0Declared = 0;
-    m_b0Used = std::max(B0BytesRead(vs.Get(), &m_b0Declared), B0BytesRead(ps.Get(), &m_b0Declared));
+    m_b0Used = std::max({ B0BytesRead(vs.Get(), &m_b0Declared), B0BytesRead(vsNoBuf.Get(), &m_b0Declared), B0BytesRead(ps.Get(), &m_b0Declared) });
 
     if (m_pso[0] || m_pso[1] || m_pso[2]) WaitIdle();   // GPU 가 옛 PSO 를 다 쓴 뒤에 바꾼다
     std::string all;
     for (int m = 0; m < kMethodCount; m++)
-        if (!BuildPso(m, vs.Get(), ps.Get())) all += m_psoError[m];
+        if (!BuildPso(m, vs.Get(), vsNoBuf.Get(), ps.Get())) all += m_psoError[m];
     m_sh.error = all;
     m_sh.buildCount++;
     return all.empty();
 }
 
-bool SpinScene::BuildPso(int m, ID3DBlob* vs, ID3DBlob* ps)
+// PSO 2개: 게임 방식(입력 레이아웃 있음) + 비교용(입력 레이아웃 없음). 다른 건 VS 와 InputLayout 뿐
+bool SpinScene::BuildPso(int m, ID3DBlob* vs, ID3DBlob* vsNoBuf, ID3DBlob* ps)
 {
     D3D12_GRAPHICS_PIPELINE_STATE_DESC pd{};
     pd.pRootSignature = m_rootSig[m].Get();
     pd.VS = { vs->GetBufferPointer(), vs->GetBufferSize() };
     pd.PS = { ps->GetBufferPointer(), ps->GetBufferSize() };
-    pd.InputLayout = { nullptr, 0 };   // 정점 버퍼 없음 (SV_VertexID)
+    pd.InputLayout = { kSpinLayout, (UINT)(sizeof(kSpinLayout) / sizeof(kSpinLayout[0])) };   // [회전-⑦] 정점 버퍼 12바이트
     pd.RasterizerState.FillMode = D3D12_FILL_MODE_SOLID;
     pd.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
     pd.RasterizerState.DepthClipEnable = TRUE;
@@ -296,14 +324,20 @@ bool SpinScene::BuildPso(int m, ID3DBlob* vs, ID3DBlob* ps)
     pd.NumRenderTargets = 1; pd.RTVFormats[0] = kBackBufferFormat;
     pd.SampleDesc.Count = 1;
     m_pso[m].Reset();
+    m_psoNoBuf[m].Reset();
     m_psoError[m].clear();
-    if (SUCCEEDED(g_dx.device->CreateGraphicsPipelineState(&pd, IID_PPV_ARGS(&m_pso[m])))) return true;
+    const bool okGame = SUCCEEDED(g_dx.device->CreateGraphicsPipelineState(&pd, IID_PPV_ARGS(&m_pso[m])));
+    // 비교용: 정점 버퍼 없음 (SV_VertexID)
+    pd.VS = { vsNoBuf->GetBufferPointer(), vsNoBuf->GetBufferSize() };
+    pd.InputLayout = { nullptr, 0 };
+    const bool okNoBuf = SUCCEEDED(g_dx.device->CreateGraphicsPipelineState(&pd, IID_PPV_ARGS(&m_psoNoBuf[m])));
+    if (okGame && okNoBuf) return true;
     char msg[512];
     snprintf(msg, sizeof msg,
              "방법 %s: 컴파일은 됐지만 PSO 를 못 만들었어요.\n"
              "%s",
              kMethodName[m],
-             "흔한 이유: b1, t0 처럼 루트 시그니처(가방)에 없는 레지스터를 씀.\n");
+             "흔한 이유: b1, t0 처럼 루트 시그니처(가방)에 없는 레지스터를 씀. 또는 SpinVertex 의 시맨틱(POSITION, SHADE)이 C++ 입력 레이아웃과 다름.\n");
     m_psoError[m] = msg;
     return false;
 }
@@ -327,7 +361,7 @@ void SpinScene::DrawCanvasText(const Canvas& c)
     snprintf(line, sizeof line, "지금: 방법 %s (%s)%s · F2 셰이더 창", kMethodName[m_method], kMethodShort[m_method],
              m_oneSlot ? " · 일부러 틀리기 켜짐" : "");
     dl->AddText(ImVec2(c.x + fs * 0.6f, c.y + fs * 0.4f), IM_COL32(255, 255, 255, 210), line);
-    if (!m_pso[m_method])
+    if (!Pso(m_method))
         dl->AddText(ImVec2(c.x + fs * 0.6f, c.y + fs * 1.8f), IM_COL32(255, 120, 120, 255),
                     "이 방법의 PSO 가 없어서 아무것도 안 그려요. 셰이더 창의 빨간 글씨를 보세요.");
     if (m_method == kRootConst && m_b0Used > sizeof(SpinConstants))
@@ -393,7 +427,7 @@ void SpinScene::OnRender(ID3D12GraphicsCommandList* cl, const Canvas& c)
     cl->RSSetScissorRects(1, &sc);
     cl->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 
-    if (m_pso[m_method])
+    if (Pso(m_method))
     {
         if (m_method == kRootConst) DrawWithRootConstants(cl, k);
         if (m_method == kRootCbv)   DrawWithRootCbv(cl, k);
@@ -404,15 +438,22 @@ void SpinScene::OnRender(ID3D12GraphicsCommandList* cl, const Canvas& c)
     if (m_readback[0]) CaptureCenters(cl, c);   // 자동 테스트 때만
 }
 
+// [회전-⑦] 삼각형 하나 그리기: 게임 방식은 정점 버퍼를 꽂고 그린다. 비교용은 번호만 (SV_VertexID)
+void SpinScene::DrawTriangle(ID3D12GraphicsCommandList* cl) const
+{
+    if (m_noBuffer) cl->DrawInstanced(3, 1, 0, 0);
+    else            m_mesh.Draw(cl);   // IASetVertexBuffers -> DrawInstanced(3) (mesh.cpp)
+}
+
 // 방법 A: 숫자 12개를 명령 목록 안에 바로 복사한다. 그래서 삼각형마다 다른 값이 그대로 남는다
 void SpinScene::DrawWithRootConstants(ID3D12GraphicsCommandList* cl, const SpinConstants k[kDraws])
 {
     cl->SetGraphicsRootSignature(m_rootSig[kRootConst].Get());
-    cl->SetPipelineState(m_pso[kRootConst].Get());
+    cl->SetPipelineState(Pso(kRootConst));
     for (UINT i = 0; i < kDraws; i++)
     {
         cl->SetGraphicsRoot32BitConstants(0, sizeof(SpinConstants) / 4, &k[i], 0);
-        cl->DrawInstanced(3, 1, 0, 0);
+        DrawTriangle(cl);
         m_lastSlot[i] = UINT_MAX;   // Upload 버퍼를 안 씀
     }
 }
@@ -421,14 +462,14 @@ void SpinScene::DrawWithRootConstants(ID3D12GraphicsCommandList* cl, const SpinC
 void SpinScene::DrawWithRootCbv(ID3D12GraphicsCommandList* cl, const SpinConstants k[kDraws])
 {
     cl->SetGraphicsRootSignature(m_rootSig[kRootCbv].Get());
-    cl->SetPipelineState(m_pso[kRootCbv].Get());
+    cl->SetPipelineState(Pso(kRootCbv));
     const D3D12_GPU_VIRTUAL_ADDRESS base = m_upload->GetGPUVirtualAddress();
     for (UINT i = 0; i < kDraws; i++)
     {
         const UINT slot = SlotFor(i);
         WriteSlot(slot, k[i]);
         cl->SetGraphicsRootConstantBufferView(0, base + (uint64_t)slot * kSlotSize);
-        cl->DrawInstanced(3, 1, 0, 0);
+        DrawTriangle(cl);
         m_lastSlot[i] = slot;
     }
 }
@@ -439,13 +480,13 @@ void SpinScene::DrawWithTable(ID3D12GraphicsCommandList* cl, const SpinConstants
     ID3D12DescriptorHeap* heaps[] = { g_dx.srvHeap.Get() };   // "이 주소록을 보세요" (테이블 전에 꼭)
     cl->SetDescriptorHeaps(1, heaps);
     cl->SetGraphicsRootSignature(m_rootSig[kTable].Get());
-    cl->SetPipelineState(m_pso[kTable].Get());
+    cl->SetPipelineState(Pso(kTable));
     for (UINT i = 0; i < kDraws; i++)
     {
         const UINT slot = SlotFor(i);
         WriteSlot(slot, k[i]);
         cl->SetGraphicsRootDescriptorTable(0, m_cbvGpu[slot]);
-        cl->DrawInstanced(3, 1, 0, 0);
+        DrawTriangle(cl);
         m_lastSlot[i] = slot;
     }
 }
@@ -506,6 +547,12 @@ void SpinScene::PanelMotion()
     ImGui::SliderFloat("빠르기", &m_speed, 0.0f, 4.0f, "%.2f배");
     Help("각도는 시간으로 정해요. CPU 가 매 프레임 각도로 cos, sin 을 계산해서 보내고, 셰이더는 그걸로 꼭짓점을 돌려요.\n"
          "멈추면 보내는 값이 그대로라 아래 \"지금 보낸 값\" 표도 멈춰요.");
+
+    ImGui::SeparatorText("삼각형 모양이 오는 길");
+    ImGui::Checkbox("비교용: 정점 버퍼 없이 (SV_VertexID)", &m_noBuffer);
+    Help("끔(기본) = 게임 방식. 삼각형 꼭짓점 3개(12바이트씩)를 정점 버퍼로 VRAM(Default 힙)에 한 번 올려 두고, 삼각형 3개가 같은 버퍼를 같이 써요. [회전-⑦]\n"
+         "켬 = 비교용. 꼭짓점을 spin.hlsl 의 SpinVSNoBuffer 안에 직접 적어 두고 번호(SV_VertexID)로 골라요. 장면 2처럼요.\n"
+         "그림은 똑같아요. 다른 건 모양을 어디서 가져오느냐뿐이에요. 자세한 비교는 장면 5 (정점 버퍼).");
 }
 
 void SpinScene::PanelShader()
@@ -517,7 +564,7 @@ void SpinScene::PanelShader()
     for (int m = 0; m < kMethodCount; m++)
     {
         if (m) ImGui::SameLine();
-        if (m_pso[m]) ImGui::TextColored(ImVec4(0.55f, 1, 0.55f, 1), "%c 됨", 'A' + m);
+        if (Pso(m)) ImGui::TextColored(ImVec4(0.55f, 1, 0.55f, 1), "%c 됨", 'A' + m);
         else          ImGui::TextColored(ImVec4(1, 0.45f, 0.45f, 1), "%c PSO 실패", 'A' + m);
     }
     ImGui::SameLine();
@@ -705,6 +752,7 @@ void SpinScene::PanelCodeFlow()
     ImGui::TextWrapped("[회전-③] CreateUploadBuffer(): Upload 힙 버퍼 하나(256 x 6 바이트)를 만들고 Map 해 둬요.");
     ImGui::TextWrapped("[회전-④] CreateCbvDescriptors(): 칸 6개마다 CBV 카드를 만들어 주소록(SRV 힙)에 꽂아요. 방법 C 만 써요.");
     ImGui::TextWrapped("[회전-⑤] MakeConstants(): 시간 -> 각도 -> cos, sin. 위치, 크기, 색도 채워요.");
+    ImGui::TextWrapped("[회전-⑦] Init() 의 CreateMesh + DrawTriangle(): 삼각형 모양(12바이트 x 3)을 정점 버퍼로 VRAM 에 한 번 올려 두고, 삼각형 3개가 같이 써요. 게임 방식이에요. 비교용 체크 상자를 켜면 SV_VertexID 로 셰이더 안의 점을 써요.");
     ImGui::TextWrapped("[회전-⑥] OnRender(): DrawWithRootConstants / DrawWithRootCbv / DrawWithTable 중 하나. 세 함수를 나란히 놓고 비교해 보세요. 다른 건 값 넘기는 한 줄뿐이에요.");
     ImGui::Unindent();
 }

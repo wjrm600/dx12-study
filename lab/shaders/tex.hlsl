@@ -7,12 +7,13 @@
 //  읽는 줄은 딱 한 줄:  gTex.Sample(gSamp, uv)
 //  uv 는 "그림 안의 위치"예요. (0, 0) = 그림 왼쪽 위, (1, 1) = 오른쪽 아래. 픽셀 개수와 상관없어요.
 //
-//  화면은 장면 2처럼 "화면을 덮는 삼각형 하나"로 그려요. 정점 버퍼가 없어요.
-//  픽셀 셰이더가 픽셀마다 uv 를 계산해요. 보기 방법은 두 가지:
-//    평면 : 가운데 네모 안에 그림을 붙여요. uv 를 1보다 크게 하면(패널의 "UV 배수") 주소 모드가 보여요.
-//    바닥 : 멀리까지 이어진 바닥에 그림을 깔아요. 멀수록 그림이 작아져서 밉맵이 필요해져요.
+//  보기 방법은 두 가지이고, 그리는 방법도 달라요 (둘 다 실제 게임에서 쓰는 방법):
+//    평면 : 네모(점 4개 + 인덱스 6개)를 정점 버퍼로 그려요. 점마다 uv 가 정점 버퍼에 들어 있어요 (TEXCOORD).
+//           게임에서 그림 붙은 판, UI, 모델 표면이 다 이렇게 와요. uv 를 1보다 크게 하면(패널의 "UV 배수") 주소 모드가 보여요.
+//    바닥 : "화면을 덮는 삼각형 하나"(정점 버퍼 없음, SV_VertexID)로 그리고, 픽셀 셰이더가 픽셀마다 uv 를 계산해요.
+//           게임의 화면 전체 효과(후처리, 하늘)도 이렇게 그려요. 멀수록 그림이 작아져서 밉맵이 필요해져요.
 //
-//  함수 이름 2개(TexVS, TexPS)는 C++ 이 찾으니까 바꾸지 마세요.
+//  함수 이름 3개(TexQuadVS, TexVS, TexPS)는 C++ 이 찾으니까 바꾸지 마세요.
 //  망가뜨려도 괜찮아요. 셰이더 창의 "처음 코드로" 버튼으로 돌아가요.
 //
 //  해 볼 실험 (셰이더 쪽. 패널 쪽 실험 3개는 로드맵 3단계에 있어요)
@@ -45,9 +46,30 @@ struct VSOut
 {
     float4 pos : SV_Position;
     float2 p   : SCREENPOS;   // 화면 위치 (-1..1, 위가 +1)
+    float2 uv  : TEXCOORD;    // 평면 보기: 정점 버퍼의 uv 를 픽셀마다 섞은 값
 };
 
-// 화면을 덮는 큰 삼각형 하나 (장면 2와 같은 방법)
+// [텍스처-⑧] 평면 보기의 네모 정점 (C++ 의 QuadVertex 와 입력 레이아웃과 짝, 16바이트)
+struct QuadVertex
+{
+    float2 position : POSITION;   // 네모 모서리 (-1..1, 위가 +1)
+    float2 uv       : TEXCOORD;   // 그림 안의 위치 (왼쪽 위 0, 0 / 오른쪽 아래 1, 1)
+};
+
+// 평면 보기: 정점 버퍼에서 온 네모를 화면 가운데에 놓고, uv 에 배수를 곱해요
+VSOut TexQuadVS(QuadVertex v)
+{
+    float halfSize = 0.8 / gZoom;                          // 네모 반지름 (화면 높이의 0.8 배)
+    float2 p = float2(v.position.x * halfSize / gAspect,   // 가로세로 비율 맞추기 (찌그러지지 않게)
+                      v.position.y * halfSize);
+    VSOut o;
+    o.pos = float4(p, 0.0, 1.0);
+    o.p   = p;
+    o.uv  = v.uv * gUvScale;                               // 배수 2 면 uv 가 0..2 -> 주소 모드가 보여요
+    return o;
+}
+
+// 바닥 보기: 화면을 덮는 큰 삼각형 하나 (장면 2와 같은 방법, 정점 버퍼 없음)
 VSOut TexVS(uint id : SV_VertexID)
 {
     float2 p = float2(-1.0, -1.0);
@@ -56,16 +78,8 @@ VSOut TexVS(uint id : SV_VertexID)
     VSOut o;
     o.pos = float4(p, 0.0, 1.0);
     o.p = p;
+    o.uv = float2(0.0, 0.0);   // 바닥은 픽셀 셰이더가 FloorUv 로 계산해요
     return o;
-}
-
-// 평면 보기: 화면 가운데 네모 -> uv. 네모 왼쪽 위가 (0, 0), 오른쪽 아래가 (배수, 배수)
-float2 PlaneUv(float2 p)
-{
-    float2 q = float2(p.x * gAspect, -p.y);   // 가로세로 비율 맞추고, 아래로 갈수록 + (그림 좌표와 같은 방향)
-    float halfSize = 0.8 / gZoom;             // 네모 반지름 (화면 높이의 0.8 배)
-    float2 base = q / (2.0 * halfSize) + 0.5; // 네모 안에서 0..1
-    return base * gUvScale;
 }
 
 // 바닥 보기: 수평선(p.y = 0.35) 아래가 바닥. 수평선에 가까울수록 멀리 있는 바닥
@@ -77,7 +91,7 @@ float2 FloorUv(float2 p)
 
 float4 TexPS(VSOut i) : SV_Target
 {
-    float2 uv = PlaneUv(i.p);
+    float2 uv = i.uv;                     // 평면: 정점 버퍼의 uv (래스터라이저가 픽셀마다 섞어 줌)
     if (gView > 0.5) uv = FloorUv(i.p);   // gView 는 모든 픽셀이 같은 값이라 이런 if 는 괜찮아요
 
     // ★ 그림 읽기. 이 한 줄이 이 장면의 주인공이에요
@@ -86,10 +100,7 @@ float4 TexPS(VSOut i) : SV_Target
     float light = 1.0;
     if (gView < 0.5)
     {
-        // 평면: 네모 밖은 어둡게 (uv 가 0..배수 밖이면 0.3)
-        float2 base = uv / gUvScale;
-        float inside = step(0.0, base.x) * step(base.x, 1.0) * step(0.0, base.y) * step(base.y, 1.0);
-        light = lerp(0.3, 1.0, inside);
+        // 평면: 네모 안만 그려지니까 그대로 (네모 밖은 아예 픽셀 셰이더가 안 돌아요)
         return float4(c.rgb * light, 1.0);
     }
 

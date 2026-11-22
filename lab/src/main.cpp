@@ -8,11 +8,13 @@
 //    장면 2: 픽셀 셰이더 놀이터 - Shadertoy 구조(화면 덮는 삼각형 + PS)를 DX12 로
 //    장면 3: 돌아가는 삼각형 - 같은 상수를 루트 상수 / 루트 CBV / 디스크립터 테이블 세 가지 길로
 //    장면 4: 텍스처 붙이기 - 그림을 Upload -> VRAM 으로 올리고, 샘플러(필터, 주소 모드, 밉맵)로 읽기
+//    장면 5: 정점 버퍼 - 점을 Default 힙(VRAM)의 정점·인덱스 버퍼로 넘기는 게임 방식 (최소 방식, 버퍼 없음과 비교)
 //    (다음 예정) 학습 로드맵 4단계부터: 큐브와 깊이 버퍼, 조명 ...
 //
 //  파일 구성:
 //    core.h / core.cpp   : 모든 장면이 같이 쓰는 DX12 뼈대 (장치, 스왑체인, 펜스 ...)
 //    scene.h             : 장면이 채워야 하는 함수 목록
+//    mesh.h / mesh.cpp   : 정점·인덱스 버퍼를 VRAM 에 올리는 도우미 (게임 방식 + 비교용 최소 방식)
 //    shader_file.*       : .hlsl 파일 읽기, 저장하면 다시 컴파일(핫 리로드), 셰이더 편집 창
 //    scenes/scene_*.cpp  : 장면 하나 = 주제 하나
 //    ../shaders/*.hlsl   : 장면마다 셰이더 파일 하나 (앱이 켜져 있어도 고치면 바로 반영)
@@ -41,6 +43,7 @@ static const SceneFactory kScenes[] = {
     CreatePlaygroundScene,  // 장면 2: 픽셀 셰이더 놀이터 (Shadertoy 옮기기)
     CreateSpinScene,        // 장면 3: 돌아가는 삼각형 (상수를 보내는 세 가지 길)
     CreateTextureScene,     // 장면 4: 텍스처 붙이기 (VRAM 에 그림 올리기, 샘플러)
+    CreateVertexScene,      // 장면 5: 정점 버퍼 (점을 GPU 에 넘기는 게임 방식)
 };
 static const int kSceneCount = (int)(sizeof(kScenes) / sizeof(kScenes[0]));
 
