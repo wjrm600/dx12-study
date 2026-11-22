@@ -31,6 +31,7 @@
 #include <cstddef>
 #include <cmath>
 #include <cstdio>
+#include <iterator>
 #include <cstring>
 #include <vector>
 
@@ -508,7 +509,7 @@ bool TextureScene::BuildPipeline()
     const bool okFloor = SUCCEEDED(g_dx.device->CreateGraphicsPipelineState(&pd, IID_PPV_ARGS(&pso)));
     // [텍스처-⑧] 평면 보기: 같은 PS, VS 만 TexQuadVS + 입력 레이아웃 (정점 버퍼 16바이트)
     pd.VS = { vsQuad->GetBufferPointer(), vsQuad->GetBufferSize() };
-    pd.InputLayout = { kQuadLayout, (UINT)(sizeof(kQuadLayout) / sizeof(kQuadLayout[0])) };
+    pd.InputLayout = { kQuadLayout, (UINT)std::size(kQuadLayout) };
     const bool okQuad = SUCCEEDED(g_dx.device->CreateGraphicsPipelineState(&pd, IID_PPV_ARGS(&psoQuad)));
     if (!okFloor || !okQuad)
     {

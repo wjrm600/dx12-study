@@ -32,6 +32,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdio>
+#include <iterator>
 #include <string>
 
 namespace {
@@ -176,7 +177,7 @@ ComPtr<ID3D12PipelineState> VertexScene::MakePso(ID3DBlob* vs, ID3DBlob* ps, boo
     pd.pRootSignature = m_rootSig.Get();
     pd.VS = { vs->GetBufferPointer(), vs->GetBufferSize() };
     pd.PS = { ps->GetBufferPointer(), ps->GetBufferSize() };
-    if (useInputLayout) pd.InputLayout = { kInputLayout, (UINT)(sizeof(kInputLayout) / sizeof(kInputLayout[0])) };
+    if (useInputLayout) pd.InputLayout = { kInputLayout, (UINT)std::size(kInputLayout) };
     else                pd.InputLayout = { nullptr, 0 };
     pd.RasterizerState.FillMode = D3D12_FILL_MODE_SOLID;
     pd.RasterizerState.CullMode = D3D12_CULL_MODE_BACK;    // 게임처럼 뒷면은 버림 (시계 방향 = 앞면)

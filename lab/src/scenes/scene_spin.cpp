@@ -30,6 +30,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <iterator>
 #include <cstddef>
 #include <cstring>
 
@@ -313,7 +314,7 @@ bool SpinScene::BuildPso(int m, ID3DBlob* vs, ID3DBlob* vsNoBuf, ID3DBlob* ps)
     pd.pRootSignature = m_rootSig[m].Get();
     pd.VS = { vs->GetBufferPointer(), vs->GetBufferSize() };
     pd.PS = { ps->GetBufferPointer(), ps->GetBufferSize() };
-    pd.InputLayout = { kSpinLayout, (UINT)(sizeof(kSpinLayout) / sizeof(kSpinLayout[0])) };   // [회전-⑦] 정점 버퍼 12바이트
+    pd.InputLayout = { kSpinLayout, (UINT)std::size(kSpinLayout) };   // [회전-⑦] 정점 버퍼 12바이트
     pd.RasterizerState.FillMode = D3D12_FILL_MODE_SOLID;
     pd.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
     pd.RasterizerState.DepthClipEnable = TRUE;
