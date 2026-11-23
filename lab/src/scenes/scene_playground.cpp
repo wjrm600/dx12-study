@@ -1,5 +1,5 @@
 // =====================================================================
-//  장면 2: 픽셀 셰이더 놀이터 - Shadertoy 를 DX12 로 옮기기 (학습 로드맵 1단계)
+//  장면 3: 픽셀 셰이더 놀이터 - Shadertoy 를 DX12 로 옮기기 (학습 로드맵 1단계)
 //
 //  Shadertoy 의 정체 = "화면을 덮는 삼각형 하나 + 픽셀 셰이더 하나".
 //  이 장면은 그걸 DX12 로 그대로 만든다. 왼쪽 그림 영역의 픽셀마다 mainImage 가 한 번씩 돈다.
@@ -43,7 +43,7 @@ static void Eli5(const char* title, const char* analogy, const char* meaning, co
 class PlaygroundScene : public Scene
 {
 public:
-    const char* Name() const override { return "장면 2: 픽셀 셰이더 놀이터 (Shadertoy 옮기기)"; }
+    const char* Name() const override { return "장면 3: 픽셀 셰이더 놀이터 (Shadertoy 옮기기)"; }
     void Init() override;
     void OnPanel() override;
     void OnCanvas(const Canvas& c) override;

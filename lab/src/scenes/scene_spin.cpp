@@ -1,5 +1,5 @@
 // =====================================================================
-//  장면 3: 돌아가는 삼각형 - 상수를 GPU 에 보내는 세 가지 길 (학습 로드맵 2단계)
+//  장면 4: 돌아가는 삼각형 - 상수를 GPU 에 보내는 세 가지 길 (학습 로드맵 2단계)
 //
 //  삼각형 3개를 그리고, 삼각형마다 "회전, 위치, 크기, 색" 12개 숫자를 GPU 에 보낸다.
 //  같은 숫자를 세 가지 길로 보낼 수 있다. 오른쪽 패널에서 바꿔 가며 비교한다.
@@ -19,7 +19,7 @@
 //    [회전-⑤] 매 프레임 값 계산 (각도 -> cos, sin)
 //    [회전-⑥] 그리기: 방법마다 값을 넘기는 함수가 다르다
 //    [회전-⑦] 정점 버퍼 (게임 방식): 삼각형 모양 12바이트 x 3 을 Default 힙(VRAM)에 한 번 올려 두고 3번 같이 쓴다
-//             비교용으로 "정점 버퍼 없이 (SV_VertexID)" 체크 상자를 켜면 장면 2처럼 셰이더 안의 점을 쓴다
+//             비교용으로 "정점 버퍼 없이 (SV_VertexID)" 체크 상자를 켜면 장면 3처럼 셰이더 안의 점을 쓴다
 // =====================================================================
 #include "../scene.h"
 #include "../mesh.h"
@@ -90,7 +90,7 @@ static void Eli5(const char* title, const char* analogy, const char* meaning, co
 class SpinScene : public Scene
 {
 public:
-    const char* Name() const override { return "장면 3: 돌아가는 삼각형 (상수를 보내는 세 가지 길)"; }
+    const char* Name() const override { return "장면 4: 돌아가는 삼각형 (상수를 보내는 세 가지 길)"; }
     void Init() override;
     void Shutdown() override;
     void OnFrameReused(UINT slot) override;
@@ -552,8 +552,8 @@ void SpinScene::PanelMotion()
     ImGui::SeparatorText("삼각형 모양이 오는 길");
     ImGui::Checkbox("비교용: 정점 버퍼 없이 (SV_VertexID)", &m_noBuffer);
     Help("끔(기본) = 게임 방식. 삼각형 꼭짓점 3개(12바이트씩)를 정점 버퍼로 VRAM(Default 힙)에 한 번 올려 두고, 삼각형 3개가 같은 버퍼를 같이 써요. [회전-⑦]\n"
-         "켬 = 비교용. 꼭짓점을 spin.hlsl 의 SpinVSNoBuffer 안에 직접 적어 두고 번호(SV_VertexID)로 골라요. 장면 2처럼요.\n"
-         "그림은 똑같아요. 다른 건 모양을 어디서 가져오느냐뿐이에요. 자세한 비교는 장면 5 (정점 버퍼).");
+         "켬 = 비교용. 꼭짓점을 spin.hlsl 의 SpinVSNoBuffer 안에 직접 적어 두고 번호(SV_VertexID)로 골라요. 장면 3처럼요.\n"
+         "그림은 똑같아요. 다른 건 모양을 어디서 가져오느냐뿐이에요. 자세한 비교는 장면 2 (정점 버퍼).");
 }
 
 void SpinScene::PanelShader()
@@ -717,7 +717,7 @@ void SpinScene::PanelEli5()
          "숫자 자체를 가방 칸에 넣는 것. SetGraphicsRoot32BitConstants(칸, 개수, 값).",
          "숫자가 명령 목록(주문서) 안에 복사돼요. 그리기마다 다른 숫자를 넣어도 각각 그대로 남아요.",
          "몇 개 안 되는 숫자를 가장 빠르고 간단하게 넘기려고. 메모리를 따로 만들 필요가 없어요.",
-         "장면 1, 장면 2 가 이 방법을 써요 (iTime 등 8개). 여기서는 12개.");
+         "장면 1, 장면 3 이 이 방법을 써요 (iTime 등 8개). 여기서는 12개.");
     Eli5("Upload 버퍼와 루트 CBV (방법 B)",
          "사물함(Upload 버퍼)에 숫자를 넣어 두고, 가방에는 사물함 주소만 적어 넣기.",
          "CBV = Constant Buffer View, 상수 버퍼를 가리키는 것. 루트 CBV 는 그 GPU 주소를 가방에 바로 넣는 것.",
@@ -759,7 +759,7 @@ void SpinScene::PanelCodeFlow()
 }
 
 // ---------------------------------------------------------------------
-// 개발용 자동 테스트 (LAB_AUTOTEST=1, LAB_SCENE=2)
+// 개발용 자동 테스트 (LAB_AUTOTEST=1, LAB_SCENE=3)
 //  삼각형 3개의 중심 픽셀을 되읽어서, 기대한 색(빨강, 초록, 파랑 또는 배경)인지 본다.
 // ---------------------------------------------------------------------
 static const int kTestCases = 6;   // (방법 A, B, C) x (일부러 틀리기 끔, 켬)

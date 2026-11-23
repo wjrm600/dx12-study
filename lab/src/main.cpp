@@ -5,10 +5,10 @@
 //  오른쪽 패널 맨 위의 "장면" 메뉴에서 고른다.
 //
 //    장면 1: 래스터라이저 - 삼각형이 어떤 픽셀을 칠하는지 (무게중심 wa·wb·wc, 외적 넓이, 컬링)
-//    장면 2: 픽셀 셰이더 놀이터 - Shadertoy 구조(화면 덮는 삼각형 + PS)를 DX12 로
-//    장면 3: 돌아가는 삼각형 - 같은 상수를 루트 상수 / 루트 CBV / 디스크립터 테이블 세 가지 길로
-//    장면 4: 텍스처 붙이기 - 그림을 Upload -> VRAM 으로 올리고, 샘플러(필터, 주소 모드, 밉맵)로 읽기
-//    장면 5: 정점 버퍼 - 점을 Default 힙(VRAM)의 정점·인덱스 버퍼로 넘기는 게임 방식 (최소 방식, 버퍼 없음과 비교)
+//    장면 2: 정점 버퍼 - 점을 Default 힙(VRAM)의 정점·인덱스 버퍼로 넘기는 게임 방식 (최소 방식, 버퍼 없음과 비교)
+//    장면 3: 픽셀 셰이더 놀이터 - Shadertoy 구조(화면 덮는 삼각형 + PS)를 DX12 로
+//    장면 4: 돌아가는 삼각형 - 같은 상수를 루트 상수 / 루트 CBV / 디스크립터 테이블 세 가지 길로
+//    장면 5: 텍스처 붙이기 - 그림을 Upload -> VRAM 으로 올리고, 샘플러(필터, 주소 모드, 밉맵)로 읽기
 //    (다음 예정) 학습 로드맵 4단계부터: 큐브와 깊이 버퍼, 조명 ...
 //
 //  파일 구성:
@@ -40,10 +40,10 @@ extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg
 using SceneFactory = Scene* (*)();
 static const SceneFactory kScenes[] = {
     CreateRasterScene,      // 장면 1: 래스터라이저
-    CreatePlaygroundScene,  // 장면 2: 픽셀 셰이더 놀이터 (Shadertoy 옮기기)
-    CreateSpinScene,        // 장면 3: 돌아가는 삼각형 (상수를 보내는 세 가지 길)
-    CreateTextureScene,     // 장면 4: 텍스처 붙이기 (VRAM 에 그림 올리기, 샘플러)
-    CreateVertexScene,      // 장면 5: 정점 버퍼 (점을 GPU 에 넘기는 게임 방식)
+    CreateVertexScene,      // 장면 2: 정점 버퍼 (점을 GPU 에 넘기는 게임 방식)
+    CreatePlaygroundScene,  // 장면 3: 픽셀 셰이더 놀이터 (Shadertoy 옮기기)
+    CreateSpinScene,        // 장면 4: 돌아가는 삼각형 (상수를 보내는 세 가지 길)
+    CreateTextureScene,     // 장면 5: 텍스처 붙이기 (VRAM 에 그림 올리기, 샘플러)
 };
 static const int kSceneCount = (int)(sizeof(kScenes) / sizeof(kScenes[0]));
 

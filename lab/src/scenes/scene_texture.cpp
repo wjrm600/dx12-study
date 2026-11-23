@@ -1,5 +1,5 @@
 // =====================================================================
-//  장면 4: 텍스처 붙이기 - 그림 한 장을 VRAM 에 올리고, 샘플러로 읽기 (학습 로드맵 3단계)
+//  장면 5: 텍스처 붙이기 - 그림 한 장을 VRAM 에 올리고, 샘플러로 읽기 (학습 로드맵 3단계)
 //
 //  지금까지는 색을 숫자(상수)로 보냈어요. 이번에는 "그림"을 보내요.
 //  그림은 크고(밉맵까지 약 1.3MB), 매 프레임 바뀌지 않으니까 VRAM(Default 힙)에 한 번 올려 두고 계속 읽어요.
@@ -135,7 +135,7 @@ enum UploadState { kCpuOnly = 0, kInUpload = 1, kCopyRecorded = 2, kDone = 3 };
 class TextureScene : public Scene
 {
 public:
-    const char* Name() const override { return "장면 4: 텍스처 붙이기 (그림 한 장 VRAM 에 올리기)"; }
+    const char* Name() const override { return "장면 5: 텍스처 붙이기 (그림 한 장 VRAM 에 올리기)"; }
     void Init() override;
     void Shutdown() override;
     void OnFrameReused(UINT slot) override;
@@ -450,7 +450,7 @@ void TextureScene::CreateSamplers()
 
 // ===== [텍스처-⑦] 루트 시그니처: 가방 칸 3개 =====
 //   칸 0: 테이블 -> SRV 카드 1장 (t0)     칸 1: 테이블 -> 샘플러 카드 1장 (s0)     칸 2: 루트 상수 8개 (b0)
-// 텍스처(SRV)는 루트 상수나 루트 CBV 처럼 가방에 직접 못 넣어요. 꼭 디스크립터 테이블(장면 3의 방법 C)로 넘겨요.
+// 텍스처(SRV)는 루트 상수나 루트 CBV 처럼 가방에 직접 못 넣어요. 꼭 디스크립터 테이블(장면 4의 방법 C)로 넘겨요.
 void TextureScene::CreateRootSig()
 {
     D3D12_DESCRIPTOR_RANGE srvRange{};
@@ -714,7 +714,7 @@ void TextureScene::PanelSampler()
     ImGui::Text("지금 쓰는 샘플러 카드: 샘플러 주소록 #%u (18장 중)", SamplerIndex());
     AboutHelp("샘플러 카드 18장(필터 3 x 주소 3 x 밉 켬/끔 2)을 처음에 다 만들어 두고, 버튼을 누르면 \"몇 번 카드를 쓸지\"만 바꿔요.\n"
               "카드 번호 = (밉 켬이면 9) + 필터 x 3 + 주소.\n"
-              "카드를 매번 새로 만들지 않는 이유: 그리는 중인 GPU 가 아직 옛 카드를 읽고 있을 수 있어서 (장면 3 프레임 세트와 같은 문제).");
+              "카드를 매번 새로 만들지 않는 이유: 그리는 중인 GPU 가 아직 옛 카드를 읽고 있을 수 있어서 (장면 4 프레임 세트와 같은 문제).");
 }
 
 void TextureScene::PanelTexture()
@@ -923,7 +923,7 @@ void TextureScene::PanelCodeFlow()
 }
 
 // ---------------------------------------------------------------------
-// 개발용 자동 테스트 (LAB_AUTOTEST=1, LAB_SCENE=3)
+// 개발용 자동 테스트 (LAB_AUTOTEST=1, LAB_SCENE=4)
 //  화면의 정해진 점 5개를 되읽어서 색을 본다.
 //   점 0: 평면 네모의 왼쪽 위 칸 가운데      점 1: 오른쪽 위 칸 가운데
 //   점 2: 네모 안 (0.97, 0.97) 지점         점 3: 네모 안 (0.6, 0.6) 지점

@@ -1,13 +1,13 @@
 // =====================================================================
-//  장면 5: 정점 버퍼 - 점을 GPU 에 넘기는 실제 게임 방식
+//  장면 2: 정점 버퍼 - 점을 GPU 에 넘기는 실제 게임 방식
 //
-//  지금까지 장면 1~4 는 점 위치를 셰이더 안에 적어 두고 번호(SV_VertexID)로 꺼냈다.
+//  장면 1 은 점 위치를 루트 상수로 보내고 셰이더가 번호(SV_VertexID)로 꺼냈다 (배우기용 시각화).
 //  게임은 모델 파일에서 읽은 점을 "정점 버퍼"에 담아 넘긴다. 이 장면은 그 길을 끝까지 보여 준다.
 //  같은 도형을 세 가지 길로 그려서 비교한다 (오른쪽 패널에서 바꾸기):
 //
 //    방법 A  게임 방식      : 정점·인덱스 버퍼를 Default 힙(VRAM)에. Upload 짐 칸 -> GPU 복사 -> 펜스
 //    방법 B  최소 방식(비교용): 정점 버퍼를 Upload 힙(RAM)에 하나만. Microsoft HelloTriangle 과 같다
-//    방법 C  버퍼 없음(비교용): 점 위치를 셰이더에 직접 적기 (SV_VertexID). 장면 2, 3 이 쓰던 방법
+//    방법 C  버퍼 없음(비교용): 점 위치를 셰이더에 직접 적기 (SV_VertexID). 장면 3 놀이터가 쓰는 방법
 //
 //  셰이더: lab/shaders/vb.hlsl (F2 셰이더 창)
 //  올리는 코드: src/mesh.h, src/mesh.cpp (다른 장면도 같이 쓰는 도우미)
@@ -103,7 +103,7 @@ static void Eli5(const char* title, const char* analogy, const char* meaning, co
 class VertexScene : public Scene
 {
 public:
-    const char* Name() const override { return "장면 5: 정점 버퍼 (점을 GPU 에 넘기는 게임 방식)"; }
+    const char* Name() const override { return "장면 2: 정점 버퍼 (점을 GPU 에 넘기는 게임 방식)"; }
     void Init() override;
     void OnPanel() override;
     void OnCanvas(const Canvas& c) override;
@@ -358,8 +358,8 @@ void VertexScene::PanelMethod()
          "Upload 짐 칸(RAM)에 먼저 쓰고, GPU 가 복사하고, 펜스로 복사가 끝난 걸 확인한 뒤 짐 칸을 지워요. 한 번 올리면 그 뒤로는 빠르게 읽어요.\n"
          "B 최소 방식 (비교용): Microsoft HelloTriangle 과 같아요. Upload 힙에 하나만 만들고 바로 그려요. 코드는 짧지만 "
          "GPU 가 그릴 때마다 PCIe 너머 RAM 에서 읽어요. 정점이 많은 모델이면 느려져요.\n"
-         "C 버퍼 없음 (비교용): 점 위치를 셰이더 안에 적어 두고 번호(SV_VertexID)로 고르는 방법. 장면 2, 3 이 이렇게 했어요. "
-         "모델을 파일에서 읽는 게임에서는 못 써요. 단, 화면을 덮는 삼각형(장면 2, 4)처럼 모양이 늘 같으면 게임도 이렇게 해요.");
+         "C 버퍼 없음 (비교용): 점 위치를 셰이더 안에 적어 두고 번호(SV_VertexID)로 고르는 방법. 장면 3 놀이터가 이렇게 해요. "
+         "모델을 파일에서 읽는 게임에서는 못 써요. 단, 화면을 덮는 삼각형(장면 3, 5)처럼 모양이 늘 같으면 게임도 이렇게 해요.");
 
     ImGui::SeparatorText("모양");
     for (int s = 0; s < kShapeCount; s++)
@@ -505,7 +505,7 @@ void VertexScene::PanelEli5()
          "Default = 주방 안 냉장고 (요리사 바로 옆, 빠름). Upload = 현관 앞 택배 상자 (집주인이 넣기 쉬움, 요리사는 멀리 가야 함).",
          "Default 힙 = GPU 전용 메모리(VRAM). Upload 힙 = CPU 가 쓸 수 있고 GPU 도 읽을 수 있는 RAM.",
          "A 는 Upload 에 잠깐 놓고 GPU 가 Default 로 옮겨요. B 는 Upload 에 그대로 두고 매번 거기서 읽어요.",
-         "모델처럼 안 바뀌고 매 프레임 읽는 데이터는 가까운 VRAM 이 빨라요. 매 프레임 바뀌는 작은 값(장면 3 의 상수)은 Upload 에 두는 게 오히려 편해요.",
+         "모델처럼 안 바뀌고 매 프레임 읽는 데이터는 가까운 VRAM 이 빨라요. 매 프레임 바뀌는 작은 값(장면 4 의 상수)은 Upload 에 두는 게 오히려 편해요.",
          "\"지금 GPU 에 있는 것\" 표의 \"어디에\" 줄. A 와 B 를 바꿔 보세요. (발표 \"DX12 메모리 구조\"의 RAM -> Upload -> VRAM 흐름과 같아요)");
     Eli5("펜스로 기다리기 (Fence)",
          "이삿짐 트럭이 짐을 다 내릴 때까지 트럭을 돌려보내면 안 되는 것.",
