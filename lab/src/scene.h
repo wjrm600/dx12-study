@@ -38,3 +38,4 @@ Scene* CreateRasterScene();
 Scene* CreatePlaygroundScene();
 Scene* CreateSpinScene();
 Scene* CreateTextureScene();
+Scene* CreateVertexScene();

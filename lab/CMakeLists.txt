@@ -16,6 +16,8 @@ add_executable(DX12StudyLab WIN32
     src/main.cpp
     src/core.cpp
     src/core.h
+    src/mesh.cpp
+    src/mesh.h
     src/shader_file.cpp
     src/ui_help.cpp
     src/shader_file.h

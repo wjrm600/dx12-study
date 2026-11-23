@@ -1,5 +1,5 @@
 // =====================================================================
-//  장면 4: 텍스처 붙이기 - 그림 한 장을 VRAM 에 올리고, 샘플러로 읽기 (학습 로드맵 3단계)
+//  장면 5: 텍스처 붙이기 - 그림 한 장을 VRAM 에 올리고, 샘플러로 읽기 (학습 로드맵 3단계)
 //
 //  지금까지는 색을 숫자(상수)로 보냈어요. 이번에는 "그림"을 보내요.
 //  그림은 크고(밉맵까지 약 1.3MB), 매 프레임 바뀌지 않으니까 VRAM(Default 힙)에 한 번 올려 두고 계속 읽어요.
@@ -18,15 +18,20 @@
 //    [텍스처-⑤] SRV 카드: "이 텍스처를 이렇게 읽으세요" 를 주소록(SRV 힙)에 꽂기
 //    [텍스처-⑥] 샘플러 힙: 읽는 규칙 카드 18장 (필터 3 x 주소 모드 3 x 밉 켬/끔 2)
 //    [텍스처-⑦] 루트 시그니처(t0 테이블, s0 테이블, b0 상수) + 그리기
+//    [텍스처-⑧] 평면 보기의 네모 = 정점 버퍼(점 4개, 위치 + uv) + 인덱스 버퍼(6개), Default 힙 (게임 방식)
+//               바닥 보기는 화면을 덮는 삼각형(정점 버퍼 없음) - 게임의 화면 전체 효과와 같은 방법
 // =====================================================================
 #include "../scene.h"
+#include "../mesh.h"
 #include "../shader_file.h"
 #include "../ui_help.h"
 #include "imgui.h"
 #include <algorithm>
 #include <cfloat>
+#include <cstddef>
 #include <cmath>
 #include <cstdio>
+#include <iterator>
 #include <cstring>
 #include <vector>
 
@@ -103,13 +108,34 @@ struct Tex
     UINT                        srvIndex = 0;   // 주소록(SRV 힙)에서 몇 번째 칸인지 (패널 표시용)
 };
 
+// ===== [텍스처-⑧] 평면 보기의 네모: 정점 하나 = 위치 2개 + uv 2개 = 16바이트. tex.hlsl 의 QuadVertex 와 짝 =====
+struct QuadVertex
+{
+    float position[2];   // POSITION : 네모 모서리 (-1..1, 위가 +1). 화면 크기는 셰이더가 gZoom, gAspect 로 맞춘다
+    float uv[2];         // TEXCOORD : 그림 안의 위치 (왼쪽 위 0, 0)
+};
+static_assert(sizeof(QuadVertex) == 16, "float 4개 = 16바이트");
+static const QuadVertex kQuad[4] =
+{
+    { { -1.0f,  1.0f }, { 0.0f, 0.0f } },   // 0 왼쪽 위
+    { {  1.0f,  1.0f }, { 1.0f, 0.0f } },   // 1 오른쪽 위
+    { {  1.0f, -1.0f }, { 1.0f, 1.0f } },   // 2 오른쪽 아래
+    { { -1.0f, -1.0f }, { 0.0f, 1.0f } },   // 3 왼쪽 아래
+};
+static const uint16_t kQuadIdx[6] = { 0, 1, 2, 0, 2, 3 };
+static const D3D12_INPUT_ELEMENT_DESC kQuadLayout[] =
+{
+    { "POSITION", 0, DXGI_FORMAT_R32G32_FLOAT, 0, offsetof(QuadVertex, position), D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
+    { "TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, offsetof(QuadVertex, uv),       D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
+};
+
 // 올리기 진행 상태 (패널의 "그림이 VRAM 까지 가는 길" 표)
 enum UploadState { kCpuOnly = 0, kInUpload = 1, kCopyRecorded = 2, kDone = 3 };
 
 class TextureScene : public Scene
 {
 public:
-    const char* Name() const override { return "장면 4: 텍스처 붙이기 (그림 한 장 VRAM 에 올리기)"; }
+    const char* Name() const override { return "장면 5: 텍스처 붙이기 (그림 한 장 VRAM 에 올리기)"; }
     void Init() override;
     void Shutdown() override;
     void OnFrameReused(UINT slot) override;
@@ -122,7 +148,9 @@ public:
 private:
     ShaderFile                   m_sh;   // lab/shaders/tex.hlsl
     ComPtr<ID3D12RootSignature>  m_rootSig;
-    ComPtr<ID3D12PipelineState>  m_pso;
+    ComPtr<ID3D12PipelineState>  m_pso;       // 바닥 보기: 화면을 덮는 삼각형 (TexVS, 정점 버퍼 없음)
+    ComPtr<ID3D12PipelineState>  m_psoQuad;   // 평면 보기: 정점 버퍼 네모 (TexQuadVS) [텍스처-⑧]
+    Mesh                         m_quad;      // [텍스처-⑧] 네모 정점 4개 + 인덱스 6개 (Default 힙)
     ComPtr<ID3D12DescriptorHeap> m_samplerHeap;
     UINT                         m_samplerInc = 0;
     Tex                          m_tex[kTexCount];
@@ -196,6 +224,8 @@ void TextureScene::Init()
     CreateSrvs();          // [텍스처-⑤]
     CreateSamplers();      // [텍스처-⑥]
     CreateRootSig();       // [텍스처-⑦]
+    // [텍스처-⑧] 평면 보기의 네모를 VRAM 에 올린다 (안은 mesh.cpp 의 [정점-②~⑥])
+    m_quad = CreateMesh(kQuad, sizeof(QuadVertex), 4, kQuadIdx, 6, MeshHeap::Default, L"texture quad");
     m_sh.Open("tex.hlsl");
     m_sh.editorOpen = false;   // 이 장면의 주인공은 패널(샘플러 바꿔 보기). 셰이더 창은 F2 로
     BuildPipeline();
@@ -420,7 +450,7 @@ void TextureScene::CreateSamplers()
 
 // ===== [텍스처-⑦] 루트 시그니처: 가방 칸 3개 =====
 //   칸 0: 테이블 -> SRV 카드 1장 (t0)     칸 1: 테이블 -> 샘플러 카드 1장 (s0)     칸 2: 루트 상수 8개 (b0)
-// 텍스처(SRV)는 루트 상수나 루트 CBV 처럼 가방에 직접 못 넣어요. 꼭 디스크립터 테이블(장면 3의 방법 C)로 넘겨요.
+// 텍스처(SRV)는 루트 상수나 루트 CBV 처럼 가방에 직접 못 넣어요. 꼭 디스크립터 테이블(장면 4의 방법 C)로 넘겨요.
 void TextureScene::CreateRootSig()
 {
     D3D12_DESCRIPTOR_RANGE srvRange{};
@@ -448,14 +478,16 @@ void TextureScene::CreateRootSig()
 
     D3D12_ROOT_SIGNATURE_DESC rs{};
     rs.NumParameters = 3; rs.pParameters = p;
+    rs.Flags = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;   // 평면 보기가 정점 버퍼를 쓴다 [텍스처-⑧]
     m_rootSig = CreateRootSignature(rs);
 }
 
 bool TextureScene::BuildPipeline()
 {
-    ComPtr<ID3DBlob> vs, ps;
+    ComPtr<ID3DBlob> vs, vsQuad, ps;
     std::string err;
     bool ok = TryCompile(m_sh, "TexVS", "vs_5_0", vs, err);
+    ok &= TryCompile(m_sh, "TexQuadVS", "vs_5_0", vsQuad, err);
     ok &= TryCompile(m_sh, "TexPS", "ps_5_0", ps, err);
     if (!ok) { m_sh.error = err; return false; }   // 문법 에러: 지금 쓰던 PSO 를 그대로 둔다
 
@@ -463,7 +495,7 @@ bool TextureScene::BuildPipeline()
     pd.pRootSignature = m_rootSig.Get();
     pd.VS = { vs->GetBufferPointer(), vs->GetBufferSize() };
     pd.PS = { ps->GetBufferPointer(), ps->GetBufferSize() };
-    pd.InputLayout = { nullptr, 0 };   // 정점 버퍼 없음 (SV_VertexID)
+    pd.InputLayout = { nullptr, 0 };   // 바닥 보기: 정점 버퍼 없음 (SV_VertexID)
     pd.RasterizerState.FillMode = D3D12_FILL_MODE_SOLID;
     pd.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
     pd.RasterizerState.DepthClipEnable = TRUE;
@@ -473,15 +505,22 @@ bool TextureScene::BuildPipeline()
     pd.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
     pd.NumRenderTargets = 1; pd.RTVFormats[0] = kBackBufferFormat;
     pd.SampleDesc.Count = 1;
-    ComPtr<ID3D12PipelineState> pso;
-    if (FAILED(g_dx.device->CreateGraphicsPipelineState(&pd, IID_PPV_ARGS(&pso))))
+    ComPtr<ID3D12PipelineState> pso, psoQuad;
+    const bool okFloor = SUCCEEDED(g_dx.device->CreateGraphicsPipelineState(&pd, IID_PPV_ARGS(&pso)));
+    // [텍스처-⑧] 평면 보기: 같은 PS, VS 만 TexQuadVS + 입력 레이아웃 (정점 버퍼 16바이트)
+    pd.VS = { vsQuad->GetBufferPointer(), vsQuad->GetBufferSize() };
+    pd.InputLayout = { kQuadLayout, (UINT)std::size(kQuadLayout) };
+    const bool okQuad = SUCCEEDED(g_dx.device->CreateGraphicsPipelineState(&pd, IID_PPV_ARGS(&psoQuad)));
+    if (!okFloor || !okQuad)
     {
         m_sh.error = "컴파일은 됐지만 PSO 를 못 만들었어요.\n"
-                     "흔한 이유: t1, s1, b1 처럼 루트 시그니처(가방)에 없는 레지스터를 씀. 이 장면의 가방에는 t0, s0, b0 만 있어요.\n";
+                     "흔한 이유: t1, s1, b1 처럼 루트 시그니처(가방)에 없는 레지스터를 씀. 이 장면의 가방에는 t0, s0, b0 만 있어요.\n"
+                     "또는 QuadVertex 의 시맨틱(POSITION, TEXCOORD)이 C++ 입력 레이아웃과 다름.\n";
         return false;
     }
     if (m_pso) WaitIdle();   // GPU 가 옛 PSO 를 다 쓴 뒤에 바꾼다
     m_pso = pso;
+    m_psoQuad = psoQuad;
     m_sh.error.clear();
     m_sh.buildCount++;
     return true;
@@ -518,7 +557,7 @@ void TextureScene::DrawCanvasText(const Canvas& c)
 
     if (m_view == 0)
     {
-        // 네모의 화면 위치 (셰이더의 PlaneUv 를 거꾸로 계산)
+        // 네모의 화면 위치 (셰이더 TexQuadVS 와 같은 계산)
         const float half = 0.8f / m_zoom;
         auto toScreen = [&](float bx, float by) {
             const float qx = (bx - 0.5f) * 2.0f * half, qy = (by - 0.5f) * 2.0f * half;
@@ -573,13 +612,14 @@ void TextureScene::OnRender(ID3D12GraphicsCommandList* cl, const Canvas& c)
     cl->RSSetScissorRects(1, &sc);
     cl->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 
-    if (m_pso)
+    ID3D12PipelineState* pso = m_view == 0 ? m_psoQuad.Get() : m_pso.Get();
+    if (pso)
     {
         // 주소록 두 권을 "이걸 보세요" 하고 펼쳐 둔다: CBV/SRV/UAV 주소록 + 샘플러 주소록 (종류마다 한 권씩만)
         ID3D12DescriptorHeap* heaps[] = { g_dx.srvHeap.Get(), m_samplerHeap.Get() };
         cl->SetDescriptorHeaps(2, heaps);
         cl->SetGraphicsRootSignature(m_rootSig.Get());
-        cl->SetPipelineState(m_pso.Get());
+        cl->SetPipelineState(pso);
 
         const Tex& t = m_tex[m_tinted ? 1 : 0];
         D3D12_GPU_DESCRIPTOR_HANDLE samp = m_samplerHeap->GetGPUDescriptorHandleForHeapStart();
@@ -590,7 +630,8 @@ void TextureScene::OnRender(ID3D12GraphicsCommandList* cl, const Canvas& c)
         cl->SetGraphicsRootDescriptorTable(0, t.srvGpu);   // 칸 0 (t0): 주소록의 SRV 카드 위치
         cl->SetGraphicsRootDescriptorTable(1, samp);       // 칸 1 (s0): 샘플러 주소록의 카드 위치
         cl->SetGraphicsRoot32BitConstants(2, sizeof(TexConstants) / 4, &k, 0);   // 칸 2 (b0)
-        cl->DrawInstanced(3, 1, 0, 0);                     // 화면을 덮는 삼각형 하나
+        if (m_view == 0) m_quad.Draw(cl);                  // 평면: 정점 버퍼 네모 (DrawIndexedInstanced(6)) [텍스처-⑧]
+        else             cl->DrawInstanced(3, 1, 0, 0);    // 바닥: 화면을 덮는 삼각형 하나
     }
 
     if (m_readback[0]) CaptureProbes(cl, c);   // 자동 테스트 때만
@@ -621,7 +662,9 @@ void TextureScene::PanelView()
     ImGui::RadioButton("바닥 (멀리까지)", &m_view, 1);
     Help("평면: 화면 가운데 네모에 그림을 붙여요. 확대하면 필터, UV 배수를 키우면 주소 모드가 보여요.\n"
          "바닥: 그림을 끝없는 바닥에 깔아요. 멀어질수록 그림이 작아져서 밉맵이 왜 필요한지 보여요.\n"
-         "둘 다 화면을 덮는 삼각형 하나에 픽셀 셰이더가 픽셀마다 uv 를 계산하는 방식이에요 (장면 2와 같은 구조).");
+         "그리는 방법도 달라요 (둘 다 실제 게임에서 쓰는 방법):\n"
+         "  평면 = 네모를 정점 버퍼(점 4개, 점마다 위치 + uv) + 인덱스 버퍼(6개)로 그려요. 그림 붙은 판, 모델 표면이 이렇게 와요. [텍스처-⑧]\n"
+         "  바닥 = 화면을 덮는 삼각형 하나(정점 버퍼 없음)에 픽셀 셰이더가 픽셀마다 uv 를 계산해요. 게임의 화면 전체 효과(후처리, 하늘)와 같은 방법.");
     if (m_view == 0)
     {
         ImGui::SetNextItemWidth(ImGui::GetFontSize() * 12);
@@ -671,7 +714,7 @@ void TextureScene::PanelSampler()
     ImGui::Text("지금 쓰는 샘플러 카드: 샘플러 주소록 #%u (18장 중)", SamplerIndex());
     AboutHelp("샘플러 카드 18장(필터 3 x 주소 3 x 밉 켬/끔 2)을 처음에 다 만들어 두고, 버튼을 누르면 \"몇 번 카드를 쓸지\"만 바꿔요.\n"
               "카드 번호 = (밉 켬이면 9) + 필터 x 3 + 주소.\n"
-              "카드를 매번 새로 만들지 않는 이유: 그리는 중인 GPU 가 아직 옛 카드를 읽고 있을 수 있어서 (장면 3 프레임 세트와 같은 문제).");
+              "카드를 매번 새로 만들지 않는 이유: 그리는 중인 GPU 가 아직 옛 카드를 읽고 있을 수 있어서 (장면 4 프레임 세트와 같은 문제).");
 }
 
 void TextureScene::PanelTexture()
@@ -874,12 +917,13 @@ void TextureScene::PanelCodeFlow()
     ImGui::TextWrapped("[텍스처-④] RecordCopies(): 첫 프레임에 CopyTextureRegion x 9 + 배리어. OnFrameReused() 에서 Upload 버퍼 지우기.");
     ImGui::TextWrapped("[텍스처-⑤] CreateSrvs(): SRV 카드 (형식, 2D, 밉 9장).");
     ImGui::TextWrapped("[텍스처-⑥] CreateSamplers(): 샘플러 힙 18장 (필터 x 주소 x 밉).");
-    ImGui::TextWrapped("[텍스처-⑦] CreateRootSig() + OnRender(): SetDescriptorHeaps(2권) -> 테이블 2개 + 루트 상수 -> DrawInstanced(3).");
+    ImGui::TextWrapped("[텍스처-⑦] CreateRootSig() + OnRender(): SetDescriptorHeaps(2권) -> 테이블 2개 + 루트 상수 -> 그리기.");
+    ImGui::TextWrapped("[텍스처-⑧] kQuad + CreateMesh: 평면 보기 네모 = 정점 4개(위치 + uv, 16바이트) + 인덱스 6개를 VRAM 에. 그리기는 DrawIndexedInstanced(6). 바닥 보기는 화면을 덮는 삼각형 DrawInstanced(3).");
     ImGui::Unindent();
 }
 
 // ---------------------------------------------------------------------
-// 개발용 자동 테스트 (LAB_AUTOTEST=1, LAB_SCENE=3)
+// 개발용 자동 테스트 (LAB_AUTOTEST=1, LAB_SCENE=4)
 //  화면의 정해진 점 5개를 되읽어서 색을 본다.
 //   점 0: 평면 네모의 왼쪽 위 칸 가운데      점 1: 오른쪽 위 칸 가운데
 //   점 2: 네모 안 (0.97, 0.97) 지점         점 3: 네모 안 (0.6, 0.6) 지점
